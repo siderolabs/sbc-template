@@ -10,17 +10,17 @@ import (
 )
 
 func main() {
-	adapter.Execute(&RpiInstaller{})
+	adapter.Execute(&BoardInstaller{})
 }
 
-type RpiInstaller struct{}
+type BoardInstaller struct{}
 
 type boardExtraOptions struct {
 	Console    []string `json:"console"`
 	ConfigFile string   `json:"configFile"`
 }
 
-func (i *RpiInstaller) GetOptions(extra boardExtraOptions) (overlay.Options, error) {
+func (i *BoardInstaller) GetOptions(extra boardExtraOptions) (overlay.Options, error) {
 	kernelArgs := []string{
 		"console=tty0",
 		"sysctl.kernel.kexec_load_disabled=1",
@@ -35,7 +35,7 @@ func (i *RpiInstaller) GetOptions(extra boardExtraOptions) (overlay.Options, err
 	}, nil
 }
 
-func (i *RpiInstaller) Install(options overlay.InstallOptions[boardExtraOptions]) error {
+func (i *BoardInstaller) Install(options overlay.InstallOptions[boardExtraOptions]) error {
 	// allows to copy a directory from the overlay to the target
 	// err := copy.Dir(filepath.Join(options.ArtifactsPath, "arm64/firmware/boot"), filepath.Join(options.MountPrefix, "/boot/EFI"))
 	// if err != nil {

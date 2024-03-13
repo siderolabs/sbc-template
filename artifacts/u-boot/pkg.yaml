@@ -30,8 +30,8 @@ steps:
         make -j $(nproc) HOSTLDLIBS_mkimage="-lssl -lcrypto"
     install:
       - |
-        mkdir -p /rootfs/artifacts/arm64/u-boot/rpi_generic
-        cp -v u-boot.bin /rootfs/artifacts/arm64/u-boot/rpi_generic
+        mkdir -p /rootfs/artifacts/arm64/u-boot/board
+        cp -v u-boot.bin /rootfs/artifacts/arm64/u-boot/board
 finalize:
   - from: /rootfs
     to: /rootfs

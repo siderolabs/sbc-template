@@ -1,4 +1,4 @@
-module rpi_generic
+module board
 
 go 1.22.1
 
