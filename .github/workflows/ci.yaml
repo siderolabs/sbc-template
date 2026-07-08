@@ -36,4 +36,4 @@ jobs:
           - /usr/etc/buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
