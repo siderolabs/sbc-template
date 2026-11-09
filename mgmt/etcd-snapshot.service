@@ -1,0 +1,8 @@
+[Unit]
+Description=Snapshot Talos etcd to the management node (sbc-quartz)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/etcd-snapshot.sh

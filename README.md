@@ -38,29 +38,41 @@ Output: `_out/talos-<version>-<board>.raw.xz`.
 
 ## Getting a cluster up
 
-**Start here: [docs/bring-up.md](docs/bring-up.md)** (images → network → Pi Zero → Pi 5 → workers → upgrades).
+**Start here: [docs/bring-up.md](docs/bring-up.md)** (images → network → management node → Pi 5 → workers → upgrades).
 
 Flash a release image, boot into maintenance mode, assign configs with
 holzkube-manager (or talosctl), and upgrade with tuppr:
-[docs/provision-and-upgrade.md](docs/provision-and-upgrade.md). The Pi Zero
-management box (holzkube, registry caches, install-image guard) is in
-[docs/zero.md](docs/zero.md).
+[docs/provision-and-upgrade.md](docs/provision-and-upgrade.md). The management
+node (Pi Zero 2 W or Quartz64 A: holzkube, registry caches, install-image guard,
+etcd backups, `sbc-flash`) is in [docs/management-node.md](docs/management-node.md).
 
 ## Flavors and netboot (optional)
 
 - `stock`: Talos kernel as released. `media`: the same kernel plus Hantro/RGA for
   hardware video decode ([docs/hardware-video.md](docs/hardware-video.md)).
-- Optional, later: U-Boot tries local disks first, then PXE. A Pi Zero running dnsmasq serves the
+- Optional, later: U-Boot tries local disks first, then PXE. The management node running dnsmasq serves the
   `netboot-<talos>-<flavor>.tar.gz` tree, and nodes are provisioned from maintenance
   mode with holzkube-manager or talosctl ([docs/netboot.md](docs/netboot.md)).
 
 ## CI releases
 
-`.github/workflows/images.yaml` runs on merges to `main` (image-related files), `v*`
-tags, weekly, or by hand. It builds stock and media (Hantro) images and upgrade
-installers for quartz64-a, soquartz-blade and soquartz-model-a, and publishes them as
-a GitHub Release. Media failures don't block the stock release. Details are in
-[docs/cluster-ops.md](docs/cluster-ops.md).
+Hands-off: one daily workflow, `track.yaml`, and you only act on failures.
+
+- It follows upstream: the latest Talos release and its kernel `PKGS`, the latest
+  siderolabs/sbc-rockchip U-Boot/TF-A/rkbin/toolchain/Go deps, and the Kwiboo FFmpeg
+  branch. They are written to `talos.env` (the source of truth) and the build files,
+  the overlay is test-built, and the change is committed to `main`.
+- Releases are tagged after upstream Talos: **`v1.14.5`** is the first build for Talos
+  v1.14.5; **`v1.14.5-r1`, `-r2`…** are rebuilds with fixes from this repo. A tag is created
+  only when build inputs changed since the last one, and `images.yaml` then publishes the
+  release: stock and media images and upgrade installers for quartz64-a, soquartz-blade
+  and soquartz-model-a.
+- The media containers are rebuilt when their Dockerfile or base image changes.
+- **Failures:** if the pin update doesn't build, you get a PR labelled `auto-update`. If a
+  release or container build fails, you get an issue labelled `build-failure`. Fix it, merge
+  to `main`, and the next tag and build happen by themselves.
+
+Details are in [docs/cluster-ops.md](docs/cluster-ops.md).
 
 ## Flash and first boot
 
@@ -103,4 +115,4 @@ CI publishes these installers on every release.
 | toolchain | siderolabs/tools v1.15.0-alpha.0-16-g54f72f9, bldr v0.6.5 |
 
 These pins match siderolabs/sbc-rockchip v0.3.0, which builds RK3566/RK3568
-boards with them. CI moves `PKGS` to whatever the latest Talos release uses.
+boards with them. `track.yaml` moves them (and `PKGS`) forward automatically.

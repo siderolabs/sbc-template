@@ -6,7 +6,9 @@
 # builds them together:
 #   1. siderolabs/pkgs @ the Talos release's PKGS commit + kernel/media.config
 #      -> talos-media/kernel, talos-media/drbd-pkg   (one ephemeral signing key)
-#   2. siderolabs/talos @ tag, PKG_KERNEL=<that kernel>
+#   2. siderolabs/talos @ tag, PKG_KERNEL=<that kernel>, with the Hantro/RGA/rkvdec
+#      modules + their V4L2 deps appended to hack/modules-arm64.txt (hack/media-modules.py);
+#      Talos only ships modules on that list
 #      -> talos-media/installer-base, talos-media/imager
 #   3. siderolabs/extensions @ tag, PKGS_PREFIX=talos-media
 #      -> talos-media/drbd (+ alias tag :<talos>)
@@ -85,30 +87,54 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     steps:
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: imjasonh/setup-crane@v0.7
       - id: have
         run: |
-          if docker manifest inspect ghcr.io/${{ needs.kernel.outputs.ns }}/imager:${{ inputs.talos }} >/dev/null 2>&1; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "imager already built"
+          # Marker tag keyed on the media config + module resolver, so changing either rebuilds the imager.
+          mkey="$(cat kernel/media.config hack/media-modules.py | sha256sum | cut -c1-12)"
+          echo "marker=${{ inputs.talos }}-${mkey}" >> "$GITHUB_OUTPUT"
+          if crane digest ghcr.io/${{ needs.kernel.outputs.ns }}/imager:${{ inputs.talos }}-${mkey} >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "imager already built for this media config"
           fi
-      - name: Build installer-base + imager with the media kernel
+      - name: Add media modules to Talos's module list
         if: steps.have.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           git clone --depth 1 --branch ${{ inputs.talos }} https://github.com/siderolabs/talos talos
-          cd talos
+          mkdir -p /tmp/kmods
+          crane export --platform linux/arm64 \
+            ghcr.io/${{ needs.kernel.outputs.ns }}/kernel:${{ needs.kernel.outputs.kernel_tag }} - \
+            | tar x -C /tmp/kmods usr/lib/modules
+          moddir="$(ls -d /tmp/kmods/usr/lib/modules/*)"
+          python3 hack/media-modules.py "${moddir}" | tee /tmp/media-modules.txt
+          before="$(wc -l < talos/hack/modules-arm64.txt)"
+          cat talos/hack/modules-arm64.txt /tmp/media-modules.txt | sort -u > /tmp/modules-arm64.txt
+          mv /tmp/modules-arm64.txt talos/hack/modules-arm64.txt
+          echo "modules-arm64.txt: ${before} -> $(wc -l < talos/hack/modules-arm64.txt) entries"
+          grep -q 'hantro-vpu.ko$' talos/hack/modules-arm64.txt || { echo "::error::hantro-vpu not in module list"; exit 1; }
+      - name: Build installer-base + imager with the media kernel
+        if: steps.have.outputs.skip != 'true'
+        working-directory: talos
+        run: |
           # INSTALLER_ARCH=targetarch: only arm64 install artifacts. The default ("all")
           # also builds amd64 ones from PKG_KERNEL, which we only build for arm64.
           make installer-base imager PLATFORM=linux/arm64 INSTALLER_ARCH=targetarch PUSH=true \
             REGISTRY=ghcr.io USERNAME=${{ needs.kernel.outputs.ns }} TAG=${{ inputs.talos }} \
             PKG_KERNEL=ghcr.io/${{ needs.kernel.outputs.ns }}/kernel:${{ needs.kernel.outputs.kernel_tag }}
+          docker buildx imagetools create \
+            -t ghcr.io/${{ needs.kernel.outputs.ns }}/imager:${{ steps.have.outputs.marker }} \
+            ghcr.io/${{ needs.kernel.outputs.ns }}/imager:${{ inputs.talos }}
 
   drbd:
     needs: kernel
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:
+      - uses: imjasonh/setup-crane@v0.7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
@@ -125,6 +151,13 @@ jobs:
           cd extensions
           make drbd PLATFORM=linux/arm64 PUSH=true REGISTRY=ghcr.io USERNAME=${{ needs.kernel.outputs.ns }} \
             PKGS_PREFIX=ghcr.io/${{ needs.kernel.outputs.ns }} PKGS=${{ needs.kernel.outputs.kernel_tag }}
-          name="$(jq -r '."image.name"' _out/drbd.metadata.json | cut -d, -f1)"
+          name=""
+          [ -f _out/drbd.metadata.json ] && name="$(jq -r '."image.name" // empty' _out/drbd.metadata.json | cut -d, -f1)"
+          if [ -z "${name}" ]; then
+            # fallback: newest tag ending in -<talos> in the drbd repo
+            tag="$(crane ls ghcr.io/${{ needs.kernel.outputs.ns }}/drbd | grep -- '-${{ inputs.talos }}$' | sort -V | tail -n1)"
+            [ -n "${tag}" ] || { echo "::error::cannot find the drbd image just built"; exit 1; }
+            name="ghcr.io/${{ needs.kernel.outputs.ns }}/drbd:${tag}"
+          fi
           echo "built ${name}"
           docker buildx imagetools create -t ghcr.io/${{ needs.kernel.outputs.ns }}/drbd:${{ inputs.talos }} "${name}"

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Download a release image and write it to a disk (eMMC in a USB adapter, SD card).
+#
+#   sbc-flash <board> <device> [--media] [--tag vX.Y.Z[-rN]] [--yes]
+#   sbc-flash quartz64-a /dev/sdb
+#   sbc-flash soquartz-blade /dev/sdc --media --tag v1.14.5-r1
+#
+# Boards: quartz64-a soquartz-blade soquartz-model-a. Default tag: latest release.
+# Verifies the .sha256 before writing and refuses mounted disks / the running root disk.
+set -euo pipefail
+REPO="${SBC_REPO:-s-collison/sbc-quartz}"
+CACHE="${SBC_CACHE:-/var/cache/sbc-quartz}"
+
+board="${1:-}"; dev="${2:-}"; shift 2 2>/dev/null || true
+flavor=""; tag=""; yes=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --media) flavor="-media" ;;
+    --tag) tag="$2"; shift ;;
+    --yes) yes=true ;;
+    *) echo "unknown option $1" >&2; exit 2 ;;
+  esac; shift
+done
+case "${board}" in quartz64-a|soquartz-blade|soquartz-model-a) ;; *)
+  sed -n '2,9p' "$0" >&2; exit 2 ;; esac
+[ -b "${dev}" ] || { echo "${dev} is not a block device" >&2; exit 2; }
+
+# safety: not mounted, not the disk holding /
+root_disk="$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null || true)"
+if [ "$(basename "${dev}")" = "${root_disk}" ]; then echo "${dev} holds the running system" >&2; exit 1; fi
+if lsblk -no MOUNTPOINTS "${dev}" | grep -q .; then echo "${dev} has mounted partitions; unmount them first" >&2; exit 1; fi
+
+if [ -z "${tag}" ]; then
+  tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])')"
+fi
+talos="${tag%%-r[0-9]*}"
+img="talos-${talos}-${board}${flavor}.raw.xz"
+url="https://github.com/${REPO}/releases/download/${tag}"
+mkdir -p "${CACHE}/${tag}" && cd "${CACHE}/${tag}"
+if [ ! -s "${img}" ]; then
+  curl -fL --progress-bar -o "${img}.part" "${url}/${img}"
+  mv "${img}.part" "${img}"
+fi
+curl -fsSL -o "${img}.sha256" "${url}/${img}.sha256"
+sha256sum -c "${img}.sha256"
+
+lsblk -o NAME,SIZE,MODEL,TRAN "${dev}"
+if ! ${yes}; then
+  read -r -p "Write ${img} (${tag}) to ${dev}? Everything on it is lost. [y/N] " a
+  [ "${a}" = y ] || [ "${a}" = Y ] || exit 1
+fi
+xz -dc "${img}" | dd of="${dev}" bs=4M conv=fsync status=progress
+sync
+echo "done: ${board}${flavor} ${tag} on ${dev}. Remove it, put it in the board, watch UART2 at 1500000 8N1."

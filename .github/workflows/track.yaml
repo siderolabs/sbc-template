@@ -1,0 +1,243 @@
+# The only scheduled workflow. Everything published comes from here.
+#
+# 1. pins (daily / by hand)
+#    latest Talos release + its PKGS           -> talos.env, Makefile, .kres.yaml, example patches
+#    latest siderolabs/sbc-rockchip release:
+#      U-Boot, TF-A, rkbin (+ checksums), bldr, TOOLS, installer go.mod/go.sum
+#                                              -> Pkgfile, Makefile, .kres.yaml, installers/quartz64/src
+#    head of the Kwiboo FFmpeg v4l2-request branch -> containers/ffmpeg-v4l2request/Dockerfile
+#    If build inputs changed, the overlay is test-built (arm64, nothing pushed):
+#      passes -> committed to main
+#      fails  -> branch auto/update-pins + PR labelled auto-update (and nothing else happens)
+#
+# 2. tag (after pins, and on every merge to main that touches build inputs)
+#    Tags follow upstream Talos: the first build for Talos v1.14.5 is tagged v1.14.5,
+#    later fixes from this repo for the same Talos become v1.14.5-r1, -r2, ...
+#    A new tag is created only when build inputs differ from the last tag, then
+#    images.yaml is dispatched on it (it publishes the release; failures open an issue).
+#
+# 3. containers
+#    Rebuilds the media containers when their Dockerfile changed since the last build or
+#    the Scrypted/Debian base image has a new digest (media-containers.yaml, issue on failure).
+#
+# You only act on an auto-update PR or a build-failure issue: fix, merge, and this
+# workflow tags and rebuilds by itself.
+#
+# One-time repo settings: Settings > Actions > General > Workflow permissions:
+# "Read and write" + "Allow GitHub Actions to create and approve pull requests".
+name: track
+on:
+  schedule:
+    - cron: "23 11 * * *"     # daily 11:23 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - talos.env
+      - Pkgfile
+      - Makefile
+      - go.work
+      - .dockerignore
+      - artifacts/**
+      - installers/**
+      - internal/**
+      - profiles/**
+      - kernel/**
+      - hack/build-image.sh
+      - hack/zboot-extract.py
+      - hack/media-modules.py
+      - containers/**
+      - .github/workflows/images.yaml
+      - .github/workflows/media-kernel.yaml
+      - .github/workflows/media-containers.yaml
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  issues: write
+  packages: read
+
+concurrency:
+  group: track
+  cancel-in-progress: false
+
+env:
+  # what counts as a build input for tagging (keep in sync with the push paths above, minus containers)
+  BUILD_PATHS: >-
+    talos.env Pkgfile Makefile go.work .dockerignore artifacts installers internal profiles kernel
+    hack/build-image.sh hack/zboot-extract.py hack/media-modules.py
+    .github/workflows/images.yaml .github/workflows/media-kernel.yaml
+
+jobs:
+  pins:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: auto/update-pins
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+
+      - name: Fetch upstream pins and apply them
+        id: up
+        run: |
+          set -euo pipefail
+          talos="$(gh api repos/siderolabs/talos/releases/latest --jq .tag_name)"
+          pkgs="$(curl -fsSL "https://raw.githubusercontent.com/siderolabs/talos/${talos}/Makefile" \
+                  | sed -nE 's/^PKGS \?= *(.*)$/\1/p' | head -n1)"
+          [ -n "${pkgs}" ] || { echo "::error::no PKGS in Talos ${talos} Makefile"; exit 1; }
+
+          rk="$(gh api repos/siderolabs/sbc-rockchip/releases/latest --jq .tag_name)"
+          base="https://raw.githubusercontent.com/siderolabs/sbc-rockchip/${rk}"
+          mkdir -p /tmp/up
+          curl -fsSL "${base}/Pkgfile" -o /tmp/up/Pkgfile
+          curl -fsSL "${base}/Makefile" -o /tmp/up/Makefile
+          go_args=""
+          if curl -fsSL "${base}/installers/radxa-zero-3e/src/go.mod" -o /tmp/up/go.mod \
+             && curl -fsSL "${base}/installers/radxa-zero-3e/src/go.sum" -o /tmp/up/go.sum; then
+            go_args="--rockchip-gomod /tmp/up/go.mod --rockchip-gosum /tmp/up/go.sum"
+          else
+            echo "::warning::sbc-rockchip ${rk}: installer go.mod not found; Go deps not updated"
+          fi
+          python3 hack/update-pins.py --talos "${talos}" --pkgs "${pkgs}" \
+            --rockchip-pkgfile /tmp/up/Pkgfile --rockchip-makefile /tmp/up/Makefile ${go_args}
+
+          # FFmpeg: follow the head of the branch named in the Dockerfile
+          df=containers/ffmpeg-v4l2request/Dockerfile
+          branch="$(sed -nE 's/^ARG FFMPEG_BRANCH=(.*)$/\1/p' "$df")"
+          repo="$(sed -nE 's/^ARG FFMPEG_REPO=(.*)$/\1/p' "$df")"
+          head="$(git ls-remote "${repo}" "refs/heads/${branch}" | cut -f1)"
+          if [ -n "${head}" ]; then sed -i -E "s/^ARG FFMPEG_REF=.*/ARG FFMPEG_REF=${head}/" "$df"
+          else echo "::warning::FFmpeg branch ${branch} not found at ${repo}; FFmpeg not updated"; fi
+
+          build=false
+          # shellcheck disable=SC2086
+          git diff --quiet -- ${BUILD_PATHS} || build=true
+          {
+            echo "talos=${talos}"; echo "rockchip=${rk}"; echo "build=${build}"
+            if git diff --quiet; then echo "changed=false"; else echo "changed=true"; fi
+          } | tee -a "$GITHUB_OUTPUT"
+          git diff --stat | tee /tmp/diffstat
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.up.outputs.build == 'true'
+
+      - name: Validate (overlay build, arm64, not pushed)
+        id: build
+        if: steps.up.outputs.build == 'true'
+        continue-on-error: true
+        run: make target-sbc-quartz PLATFORM=linux/arm64
+
+      - name: Commit to main
+        if: steps.up.outputs.changed == 'true' && steps.build.outcome != 'failure'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: track upstream (Talos ${{ steps.up.outputs.talos }}, sbc-rockchip ${{ steps.up.outputs.rockchip }})" \
+            -m "$(cat /tmp/diffstat)"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          for n in $(gh pr list --label auto-update --state open --json number --jq '.[].number'); do
+            gh pr close "$n" --delete-branch --comment "Superseded: upstream pins applied to main in $(git rev-parse --short HEAD)."
+          done
+
+      - name: Build failed -> open/update PR
+        if: steps.build.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${BRANCH}"
+          git commit -am "chore: track upstream (Talos ${{ steps.up.outputs.talos }}, sbc-rockchip ${{ steps.up.outputs.rockchip }})"
+          git push -f origin "${BRANCH}"
+          body="$(printf 'The automatic pin update **failed the overlay build**: %s\n\nUpstream: Talos `%s`, sbc-rockchip `%s`.\n\n```\n%s\n```\n\nFix on this branch and merge. The merge tags and builds the release by itself.' \
+                  "${run_url}" "${{ steps.up.outputs.talos }}" "${{ steps.up.outputs.rockchip }}" "$(cat /tmp/diffstat)")"
+          gh label create auto-update --color FBCA04 --description "Automatic dependency update" --force
+          pr="$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "${pr}" ]; then
+            gh pr comment "${pr}" --body "${body}"
+          else
+            gh pr create --base main --head "${BRANCH}" --label auto-update \
+              --title "Upstream update failing: Talos ${{ steps.up.outputs.talos }} / sbc-rockchip ${{ steps.up.outputs.rockchip }}" \
+              --body "${body}"
+          fi
+          exit 1
+
+  tag:
+    needs: pins
+    # after a successful pins run, or directly on a merge to main
+    if: always() && (needs.pins.result == 'success' || needs.pins.result == 'skipped')
+    runs-on: ubuntu-24.04-arm
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: main, fetch-depth: 0, fetch-tags: true }
+      - name: Tag a new build if build inputs changed
+        run: |
+          set -euo pipefail
+          . ./talos.env
+          v="${TALOS_VERSION}"
+          # newest existing tag for this Talos version: v, v-r1, v-r2, ...
+          last="$(git tag -l "${v}" "${v}-r*" | sort -V | tail -n1)"
+          if [ -z "${last}" ]; then
+            new="${v}"
+          # shellcheck disable=SC2086
+          elif git diff --quiet "${last}" HEAD -- ${BUILD_PATHS}; then
+            echo "main has no build changes since ${last}"
+            if ! gh release view "${last}" >/dev/null 2>&1; then
+              echo "::notice::${last} has no release yet (build failed or still running): see the build-failure issue"
+            fi
+            exit 0
+          else
+            n="${last##*-r}"; [ "${n}" = "${last}" ] && n=0
+            new="${v}-r$((n + 1))"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${new}" -m "Talos ${v} build ${new} (pkgs ${PKGS})"
+          git push origin "refs/tags/${new}"
+          # tags pushed with GITHUB_TOKEN don't trigger workflows; dispatch explicitly
+          gh workflow run images.yaml --ref "${new}"
+          echo "::notice::tagged ${new}, images.yaml dispatched"
+
+  containers:
+    needs: pins
+    if: always() && (needs.pins.result == 'success' || needs.pins.result == 'skipped')
+    runs-on: ubuntu-24.04-arm
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: main, fetch-depth: 0 }
+      - uses: imjasonh/setup-crane@v0.7
+      - name: Rebuild media containers if their inputs changed
+        run: |
+          set -euo pipefail
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          paths="containers .github/workflows/media-containers.yaml"
+          need=""
+          # name=base pairs must match the matrix in media-containers.yaml
+          for pair in scrypted-rk3566=ghcr.io/koush/scrypted:latest ffmpeg-v4l2request=debian:trixie-slim; do
+            name="${pair%%=*}"; base="${pair#*=}"
+            labels="$(crane config "ghcr.io/${owner}/${name}:latest" 2>/dev/null | jq -c '.config.Labels // {}' || echo '{}')"
+            rev="$(jq -r '."org.opencontainers.image.revision" // empty' <<<"${labels}")"
+            built_base="$(jq -r '."org.opencontainers.image.base.digest" // empty' <<<"${labels}")"
+            now_base="$(crane digest "${base}")"
+            if [ -z "${rev}" ]; then need="${need} ${name}(not built)"
+            # shellcheck disable=SC2086
+            elif ! git cat-file -e "${rev}^{commit}" 2>/dev/null || ! git diff --quiet "${rev}" HEAD -- ${paths}; then need="${need} ${name}(Dockerfile)"
+            elif [ "${built_base}" != "${now_base}" ]; then need="${need} ${name}(new base)"
+            fi
+          done
+          if [ -n "${need}" ]; then
+            echo "::notice::rebuilding media containers:${need}"
+            gh workflow run media-containers.yaml --ref main
+          else
+            echo "media containers up to date"
+          fi

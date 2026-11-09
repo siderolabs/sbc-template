@@ -25,7 +25,9 @@
 # also writes GRUB.
 set -euo pipefail
 
-TALOS_VERSION="${TALOS_VERSION:-v1.14.5}"
+if [ -z "${TALOS_VERSION:-}" ]; then
+  TALOS_VERSION="$(sed -nE 's/^TALOS_VERSION=//p' "$(dirname "$0")/../talos.env")"
+fi
 FLAVOR="${FLAVOR:-stock}"
 TAG="$(git describe --tag --always --dirty --match 'v[0-9]*')"
 OVERLAY_IMAGE="${OVERLAY_IMAGE:-ghcr.io/s-collison/sbc-quartz:${TAG}}"

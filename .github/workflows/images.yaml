@@ -2,31 +2,23 @@
 # board, in two flavors:
 #   stock  - Talos kernel as released (+ official drbd)
 #   media  - same mainline kernel + Hantro/RGA (media-kernel.yaml), drbd rebuilt for it
-# and publishes a GitHub Release. A media failure never blocks the stock images.
+# and publishes a GitHub Release named after the git tag. A media failure never
+# blocks the stock images.
 #
-# Triggers: push to main (image-related paths) | tag v* | weekly | manual.
+# Tags follow upstream Talos: v1.14.5 is the first build for Talos v1.14.5,
+# v1.14.5-r1, -r2 ... are rebuilds of the same Talos with fixes from this repo.
+# track.yaml creates those tags and dispatches this workflow on them, so a
+# normal run needs no human. Pushing a v* tag by hand works the same way.
+# Running it by hand on a branch builds and uploads workflow artifacts (7 days)
+# without publishing a release.
 name: images
 on:
   push:
-    branches: [main]
-    paths:
-      - Pkgfile
-      - artifacts/**
-      - installers/**
-      - internal/**
-      - profiles/**
-      - kernel/**
-      - hack/build-image.sh
-      - hack/zboot-extract.py
-      - .github/workflows/images.yaml
-      - .github/workflows/media-kernel.yaml
     tags: ["v*"]
-  schedule:
-    - cron: "17 9 * * 1"   # Mondays 09:17 UTC
   workflow_dispatch:
     inputs:
       talos_version:
-        description: "Talos version (e.g. v1.14.5). Empty = latest release"
+        description: "Talos version override. Empty = talos.env at this ref (normal)"
         required: false
       media:
         description: "Also build the media (Hantro) flavor. First run builds the kernel: several hours"
@@ -37,13 +29,14 @@ on:
         type: boolean
         default: false
       force:
-        description: "Rebuild even if a release for this version already exists"
+        description: "Rebuild even if this tag already has a release"
         type: boolean
         default: false
 
 permissions:
   contents: write
   packages: write
+  issues: write
   id-token: write      # keyless cosign signatures (GitHub OIDC identity)
 
 concurrency:
@@ -77,19 +70,30 @@ jobs:
           NETBOOT: ${{ github.event_name == 'workflow_dispatch' && inputs.netboot }}
         run: |
           set -euo pipefail
-          talos="${INPUT:-$(gh api repos/siderolabs/talos/releases/latest --jq .tag_name)}"
-          # The Talos Makefile pins the pkgs (kernel) build for that release.
-          pkgs="$(curl -fsSL "https://raw.githubusercontent.com/siderolabs/talos/${talos}/Makefile" \
-                  | sed -nE 's/^PKGS \?= *(.*)$/\1/p' | head -n1)"
+          . ./talos.env
+          talos="${INPUT:-${TALOS_VERSION}}"
+          if [ "${talos}" = "${TALOS_VERSION}" ]; then
+            pkgs="${PKGS}"
+          else
+            # older release requested by hand: use the kernel pkgs that release pinned
+            pkgs="$(curl -fsSL "https://raw.githubusercontent.com/siderolabs/talos/${talos}/Makefile" \
+                    | sed -nE 's/^PKGS \?= *(.*)$/\1/p' | head -n1)"
+          fi
           [ -n "${pkgs}" ] || { echo "::error::could not find PKGS for ${talos}"; exit 1; }
-          src="$(git describe --tag --always --match 'v[0-9]*')"
-          skip=false
-          if [ "${GITHUB_EVENT_NAME}" = schedule ] || { [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ] && [ "${FORCE}" != true ]; }; then
-            gh release view "talos-${talos}-${src}" >/dev/null 2>&1 && skip=true
+          release_tag=""; skip=false
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            release_tag="${GITHUB_REF_NAME}"; overlay_tag="${GITHUB_REF_NAME}"
+            case "${release_tag}" in
+              "${talos}"|"${talos}"-r[0-9]*) ;;
+              *) [ -n "${INPUT}" ] || { echo "::error::tag ${release_tag} doesn't match talos.env ${talos}"; exit 1; } ;;
+            esac
+            if [ "${FORCE}" != true ] && gh release view "${release_tag}" >/dev/null 2>&1; then skip=true; fi
+          else
+            overlay_tag="${talos}-$(git rev-parse --short HEAD)"
           fi
           {
             echo "talos=${talos}"; echo "pkgs=${pkgs}"
-            echo "overlay_tag=${src}-${talos}"; echo "release_tag=talos-${talos}-${src}"
+            echo "overlay_tag=${overlay_tag}"; echo "release_tag=${release_tag}"
             echo "skip=${skip}"; echo "owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
             echo "media=${MEDIA}"; echo "netboot=${NETBOOT:-false}"
           } | tee -a "$GITHUB_OUTPUT"
@@ -253,7 +257,7 @@ jobs:
   release:
     needs: [resolve, images, images-media]
     # stock must succeed; media is included when it built
-    if: always() && needs.images.result == 'success'
+    if: always() && needs.images.result == 'success' && needs.resolve.outputs.release_tag != ''
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/download-artifact@v8
@@ -279,6 +283,30 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve.outputs.release_tag }}
-          name: Talos ${{ needs.resolve.outputs.talos }} (${{ needs.resolve.outputs.release_tag }})
+          name: ${{ needs.resolve.outputs.release_tag }} (Talos ${{ needs.resolve.outputs.talos }})
           body_path: notes.md
           files: dist/*
+
+  # Unattended runs (push/dispatch from track.yaml) report failures as an issue
+  # instead of relying on someone reading the Actions tab. The media flavor is
+  # optional, so its failure is reported too, without failing the release.
+  report:
+    needs: [resolve, overlay, media-kernel, images, images-media, release]
+    if: always() && github.ref_type == 'tag' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-24.04-arm
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          set -euo pipefail
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          title="images: ${GITHUB_REF_NAME} failed"
+          body="$(printf 'Run: %s (%s on %s)\n\n| job | result |\n|---|---|\n| resolve | %s |\n| overlay | %s |\n| media-kernel | %s |\n| images (stock) | %s |\n| images-media | %s |\n| release | %s |\n\nFix on main: the tracker tags the fix as the next -rN and rebuilds. Close this once that release is out.' \
+            "${run_url}" "${GITHUB_EVENT_NAME}" "${GITHUB_SHA::7}" \
+            "${{ needs.resolve.result }}" "${{ needs.overlay.result }}" "${{ needs.media-kernel.result }}" \
+            "${{ needs.images.result }}" "${{ needs.images-media.result }}" "${{ needs.release.result }}")"
+          gh label create build-failure --color D93F0B --description "Unattended build failed" --force
+          n="$(gh issue list --label build-failure --state open --search 'images: in:title' --json number --jq '.[0].number // empty')"
+          if [ -n "$n" ]; then gh issue comment "$n" --body "${body}"
+          else gh issue create --label build-failure --title "${title}" --body "${body}"; fi

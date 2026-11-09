@@ -36,6 +36,10 @@ What *is* enabled: `DRM_ROCKCHIP` (display), `DRM_PANFROST` (Mali GPU),
   FFmpeg is Kwiboo's `v4l2-request-n8.1` (FFmpeg 8.1 with the V4L2 Request hwaccels that
   are pending upstream). Example Deployment: `talos/examples/scrypted-media.yaml`.
   Decoder args in Scrypted: `-hwaccel v4l2request -hwaccel_output_format drm_prime`.
+- **Modules in the image:** Talos only ships modules named in its `hack/modules-arm64.txt`.
+  `media-kernel.yaml` appends the Hantro/RGA/rkvdec modules and their V4L2/videobuf2
+  dependencies (resolved by `hack/media-modules.py` from the built kernel) before
+  building the imager.
 - **Check on a node:** `talosctl -n <ip> ls /dev | grep -E 'video|media'`, then in the
   pod `ffmpeg -hide_banner -hwaccels` lists `v4l2request`.
 

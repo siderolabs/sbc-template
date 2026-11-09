@@ -29,16 +29,16 @@ patches / machine class in holzkube):
 
 - `drbd.yaml`: DRBD for Piraeus/LINSTOR.
 - `tuppr.yaml`: Talos API access for tuppr.
-- `registry-mirror.yaml`: pull through the Pi Zero's caches.
+- `registry-mirror.yaml`: pull through the management node's caches.
 - `rpi5-controlplane.yaml` (Pi 5 only, first apply): etcd/EPHEMERAL on the SSD, media volume.
 - Install disk: choose the disk you flashed (`talosctl get disks --insecure -n <ip>`).
 
 **The installer image gets fixed up afterwards.** holzkube-manager 0.8 sets
 `.machine.install.image` itself (stock or Image Factory installer) and adds it after your
-patches. The Pi Zero's **install-image-guard** ([zero.md](zero.md)) then pins each
+patches. The management node's **install-image-guard** ([management-node.md](management-node.md)) then pins each
 Quartz/SOQuartz node to `ghcr.io/s-collison/talos-installer-<board>:<talos>` within a few
 minutes. For a flashed node nothing is reinstalled, so the stock value is never used.
-Without the Zero, run once per node:
+Without a management node, run once per node:
 
 ```sh
 talosctl -n <ip> patch mc --mode=no-reboot \
@@ -81,7 +81,7 @@ hook rewrites U-Boot and the DTB, so **U-Boot updates ride along with Talos upgr
 
 ## Order of operations for a new Talos release
 
-1. CI (`images.yaml`, weekly or manual) publishes `talos-installer-<board>:<new>` and the release images.
+1. CI (`track.yaml` → `images.yaml`, automatic) publishes `talos-installer-<board>:<new>` and the release images.
 2. Bump `TalosUpgrade.spec.talos.version`. tuppr rolls the cluster.
 
 ## Later: holzkube for everything (self-hosted Image Factory)

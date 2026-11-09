@@ -1,5 +1,5 @@
 # Inventory for install-image-guard: which board installer each node must use.
-# Copy to /etc/sbc-quartz/nodes.yaml on the Zero.
+# Copy to /etc/sbc-quartz/nodes.yaml on the management node.
 installerRepo: ghcr.io/s-collison/talos-installer
 nodes:
   - { ip: 10.20.0.21, board: quartz64-a }

@@ -1,6 +1,6 @@
 # Pull ghcr.io (installers, overlay, Talos images) and docker.io through the
-# Pi Zero's caches (zero/compose.yaml). Talos falls back to the upstream
-# registry when the Zero is unreachable (no skipFallback).
+# management node's caches (mgmt/compose.yaml). Talos falls back to the upstream
+# registry when the management node is unreachable (no skipFallback).
 apiVersion: v1alpha1
 kind: RegistryMirrorConfig
 name: ghcr.io

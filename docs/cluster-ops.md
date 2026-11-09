@@ -2,7 +2,8 @@
 
 ## Topology
 
-The existing PoE switch carries a dedicated cluster VLAN. A Pi Zero provides
+The existing PoE switch carries a dedicated cluster VLAN. A management node
+(Pi Zero 2 W or Quartz64 A, [management-node.md](management-node.md)) provides
 DHCP/TFTP/DNS and holzkube-manager, the Pi 5 is the control plane (API) and NFS,
 and the Quartz boards are workers. Full layout, VLAN settings and the PXE install
 flow are in [netboot.md](netboot.md).
@@ -31,20 +32,55 @@ images under `ghcr.io/s-collison/talos-media/*`). Media nodes also get
 
 ## What CI publishes
 
-`.github/workflows/images.yaml` runs on a tag, weekly, or by hand. It:
+### Tracking upstream (`track.yaml`, daily)
 
-1. finds the latest Talos release (or the version you give it) and the kernel build
-   it uses (`PKGS` in that release's Makefile);
+| reads | writes |
+|---|---|
+| latest siderolabs/talos release, its Makefile `PKGS` | `talos.env`, `Makefile`, `.kres.yaml`, `talos/patches/install-*.yaml`, `talos/tuppr/upgrades.yaml` |
+| latest siderolabs/sbc-rockchip release: Pkgfile, Makefile, installer go.mod/go.sum | `Pkgfile` (U-Boot, TF-A, rkbin + checksums, bldr), `TOOLS`, `installers/quartz64/src/go.{mod,sum}`, `go.work` |
+
+It also moves `FFMPEG_REF` in `containers/ffmpeg-v4l2request/Dockerfile` to the head of
+`FFMPEG_BRANCH`. The edits are made by `hack/update-pins.py` (run it locally with the same
+arguments to reproduce). If build inputs changed, `make target-sbc-quartz PLATFORM=linux/arm64`
+must pass:
+
+- pass → commit to `main`, close any open `auto-update` PR;
+- fail → force-push `auto/update-pins`, open/comment the `auto-update` PR with the run link,
+  and stop. Fix on that branch and merge. PR checks don't run on bot-pushed branches; push
+  any commit yourself (or close/reopen) to start them.
+
+Then, in the same run (and on every merge to `main` that touches build inputs):
+
+- **tag**: tags are named after the Talos version in `talos.env`. No tag for it yet →
+  `vX.Y.Z`. Build inputs changed since the newest `vX.Y.Z[-rN]` → `vX.Y.Z-r(N+1)`.
+  Otherwise nothing. The new tag is pushed and `images.yaml` is dispatched on it.
+- **containers**: `media-containers.yaml` is dispatched if `containers/` changed since the
+  commit recorded in the published image's labels, or the Scrypted/Debian base digest moved.
+
+Installers are pushed as `talos-installer-<board>[-media]:<talos>` (what tuppr upgrades
+to; a `-rN` rebuild replaces it) and the release assets stay on each tag.
+
+To hold an older Talos, edit `talos.env` by hand and disable the track workflow
+(Actions → track → ⋯ → Disable), otherwise the next run moves it forward again.
+
+### Building (`images.yaml`)
+
+Runs on a `v*` tag (created by track, or pushed by you) or by hand. Failures on tag runs
+open/comment an issue labelled `build-failure`. Run by hand on a branch, it builds and
+uploads 7-day workflow artifacts without a release. It:
+
+1. reads the Talos version and kernel build (`PKGS`) from `talos.env` (a manual run
+   may override the version);
 2. builds the media kernel stack if it's missing (`media-kernel.yaml`), and the overlay
-   `ghcr.io/s-collison/sbc-quartz:<repo-tag>-<talos>`;
+   `ghcr.io/s-collison/sbc-quartz:<tag>` (e.g. `v1.14.5-r1`);
 3. for each flavor × board (`quartz64-a`, `soquartz-blade`, `soquartz-model-a`):
    - `talos-<talos>-<board>[-media].raw.xz`, verified (idbloader, arm64 GRUB, fdtfile, PXE);
    - upgrade installer `ghcr.io/s-collison/talos-installer-<board>[-media]:<talos>`;
 4. builds `netboot-<talos>-<flavor>.tar.gz` (raw kernel Image, initramfs, DTBs,
    pxelinux.cfg, U-Boot binaries);
-5. creates a GitHub Release `talos-<talos>-<repo-tag>` with all of it and checksums.
+5. creates the GitHub Release for the tag with all of it and checksums.
 
-`containers.yaml` builds `ghcr.io/s-collison/scrypted-rk3566` and
+`media-containers.yaml` builds `ghcr.io/s-collison/scrypted-rk3566` and
 `ghcr.io/s-collison/ffmpeg-v4l2request` (FFmpeg 8.1 + V4L2 Request hwaccel).
 
 ## First install (simplest bare-metal path)
@@ -82,7 +118,7 @@ for Rockchip boards. Upgrades keep whatever boot loader is already on the disk.
 
 U-Boot on every board has PXE. Local disks are tried first, then the network.
 CI publishes a TFTP tree per flavor (`netboot-<talos>-<flavor>.tar.gz`). See
-[netboot.md](netboot.md) for the Pi Zero setup and the PXE → holzkube → install flow.
+[netboot.md](netboot.md) for the management node setup and the PXE → holzkube → install flow.
 
 ## M.2 SSD with DRBD / LINSTOR (Piraeus)
 
@@ -113,7 +149,7 @@ the Quartz/SOQuartz nodes, because its upgrades come from the Image Factory.
 | tool | cost / license | GUI | works with these boards? |
 |---|---|---|---|
 | **tuppr** | free, AGPL-3.0 | no (kubectl/GitOps) | yes; upgrades are driven by version, which our installer tags support |
-| **holzkube-manager** | free, AGPL-3.0, alpha (0.8) | yes, web + mobile | runs outside the cluster (Pi Zero). Use it for provisioning/config; its upgrades go through the Image Factory, so not for these boards |
+| **holzkube-manager** | free, AGPL-3.0, alpha (0.8) | yes, web + mobile | runs outside the cluster (management node). Use it for provisioning/config; its upgrades go through the Image Factory, so not for these boards |
 | **Omni (self-hosted)** | free for home lab / non-production under BSL; hosted Hobby is paid | yes | builds images and installers through Image Factory, which doesn't have this overlay, so its upgrades would fight these boards |
 | Kamaji | free | no | runs hosted control planes; not an OS fleet or upgrade manager |
 | Headlamp | free | yes | Kubernetes GUI only (workloads), no Talos upgrades |

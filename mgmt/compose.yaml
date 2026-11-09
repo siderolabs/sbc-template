@@ -1,8 +1,8 @@
-# Pi Zero 2 W management box (outside the cluster), Raspberry Pi OS Lite 64-bit + Docker.
-#   docker compose -f zero/compose.yaml up -d
+# Management node registry caches (Pi Zero 2 W or Quartz64 A; see docs/management-node.md).
+#   docker compose --env-file /etc/sbc-quartz/mgmt.env -f mgmt/compose.yaml up -d
 # Pull-through caches (Talos docs: one registry:2 per upstream, one port each).
 # Talos nodes use them via talos/patches/registry-mirror.yaml and fall back to
-# the upstream registry if the Zero is down. Data lives on the Zero's USB disk.
+# the upstream registry if the management node is down. Data lives under DATA_DIR.
 services:
   cache-ghcr:
     image: registry:2
@@ -11,8 +11,9 @@ services:
     environment:
       REGISTRY_PROXY_REMOTEURL: https://ghcr.io
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_PROXY_TTL: ${REGISTRY_TTL:-168h}
       OTEL_TRACES_EXPORTER: none
-    volumes: ["/mnt/usb/registry/ghcr:/var/lib/registry"]
+    volumes: ["${DATA_DIR:?set in mgmt.env}/registry/ghcr:/var/lib/registry"]
   cache-docker:
     image: registry:2
     restart: unless-stopped
@@ -20,5 +21,6 @@ services:
     environment:
       REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_PROXY_TTL: ${REGISTRY_TTL:-168h}
       OTEL_TRACES_EXPORTER: none
-    volumes: ["/mnt/usb/registry/docker:/var/lib/registry"]
+    volumes: ["${DATA_DIR:?set in mgmt.env}/registry/docker:/var/lib/registry"]

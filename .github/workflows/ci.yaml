@@ -23,7 +23,7 @@ jobs:
           python3 - <<'PY'
           import glob, sys, yaml
           bad = 0
-          for f in glob.glob(".github/workflows/*.yaml") + glob.glob("talos/**/*.yaml", recursive=True) + glob.glob("zero/*.yaml*") + glob.glob("profiles/**/*.yaml", recursive=True):
+          for f in glob.glob(".github/workflows/*.yaml") + glob.glob("talos/**/*.yaml", recursive=True) + glob.glob("mgmt/*.yaml*") + glob.glob("profiles/**/*.yaml", recursive=True):
               try:
                   list(yaml.safe_load_all(open(f)))
               except Exception as e:
@@ -32,8 +32,8 @@ jobs:
           PY
       - name: Shell and Python syntax
         run: |
-          for f in hack/*.sh; do bash -n "$f"; done
-          python3 -m py_compile hack/zboot-extract.py zero/install-image-guard.py
+          for f in hack/*.sh mgmt/*.sh mgmt/sbc-flash; do bash -n "$f"; done
+          python3 -m py_compile hack/zboot-extract.py hack/update-pins.py hack/media-modules.py mgmt/install-image-guard.py
       - name: No *.tmpl files (bldr would load them)
         run: |
           if git ls-files '*.tmpl' | grep -q .; then git ls-files '*.tmpl'; echo "::error::rename *.tmpl files"; exit 1; fi

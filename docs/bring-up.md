@@ -1,28 +1,30 @@
 # Bring-up runbook
 
-The order matters: images → network → Pi Zero → Pi 5 (control plane) → workers →
+The order matters: images → network → management node → Pi 5 (control plane) → workers →
 upgrades. Talos v1.14.5 is the example version throughout.
 
 ```
 Express 7 (gateway, DHCP/DNS) ── PoE switch, VLAN 20 "cluster" 10.20.0.0/24
-   ├─ Pi Zero 2 W   10.20.0.5   holzkube-manager, registry caches, install-image guard, etcd backups  (not in the cluster)
+   ├─ mgmt node     10.20.0.5   Pi Zero 2 W or Quartz64 A: holzkube-manager, registry caches, install-image guard, etcd backups
    ├─ Pi 5 16GB     10.20.0.10  control plane / API + Plex, ripping, NFS (2 TB SSD)
    ├─ Quartz64 A    10.20.0.21  worker
    ├─ SOQuartz Blade 10.20.0.22 worker
    └─ SOQuartz Model-A 10.20.0.23 worker
 ```
 
-## 0. Images (once per Talos release, automatic afterwards)
+## 0. Images (automatic)
 
-1. Push the branch, open the PR and merge it:
-   `git push -u origin fix/quartz64-arm64-boot && gh pr create --fill --body-file _out/PR_BODY.md`
-2. Merging to `main` starts **images** automatically (it also runs on `v*` tags, Mondays, and
-   GitHub → Actions → **images** → *Run workflow*). It builds the **stock** and **media** (Hantro)
-   images for each board. The first media run builds the kernel and takes several hours; stock
-   images don't wait for it.
+1. One-time repo setting: Settings → Actions → General → Workflow permissions → **Read and
+   write** and **Allow GitHub Actions to create and approve pull requests**.
+2. Merge to `main`. **track** runs on the merge (and daily): it tags the build after the Talos
+   version in `talos.env` (`v1.14.5`, later fixes `v1.14.5-r1`…) and starts **images**, which
+   builds the **stock** and **media** (Hantro) images for each board and publishes the Release.
+   The first media run builds the kernel and takes several hours; stock images don't wait.
+   From then on you only hear from it through an `auto-update` PR or a `build-failure` issue.
 3. When it's done, GitHub → Packages: set **sbc-quartz** and every **talos-installer-\*** package
    to **public**. Talos pulls installers without credentials.
-4. Download `talos-v1.14.5-<board>.raw.xz` for each board from the new Release.
+4. Download `talos-v1.14.5-<board>.raw.xz` for each board from the new Release, or write it
+   straight to a card/eMMC from the management node: `sudo sbc-flash <board> /dev/sdX`.
 
 From then on it runs every Monday and publishes any new Talos release automatically.
 
@@ -34,19 +36,18 @@ From then on it runs every Monday and publishes any new Talos release automatica
 - Switch ports for these five devices: native VLAN 20. Uplink to the Express: VLAN 20 tagged.
   Don't attach VLAN 20 to an SSID, and exclude it on AP/mesh uplink ports.
 
-## 2. Pi Zero 2 W (management box)
+## 2. Management node
 
-Raspberry Pi OS Lite 64-bit, USB-Ethernet + PoE splitter, USB disk mounted at `/mnt/usb`.
-Details are in [zero.md](zero.md). In short:
+A Pi Zero 2 W or a spare Quartz64 A (DietPi on eMMC) at 10.20.0.5. Full steps per board
+are in [management-node.md](management-node.md). In short:
 
 ```sh
-sudo apt install docker.io docker-compose python3-yaml
-curl -sL https://talos.dev/install | sh                       # talosctl
-sudo docker compose -f zero/compose.yaml up -d                # ghcr.io :5003, docker.io :5000 caches
+git clone https://github.com/s-collison/sbc-quartz && cd sbc-quartz
+sudo mgmt/install.sh && sudoedit /etc/sbc-quartz/mgmt.env /etc/sbc-quartz/nodes.yaml && sudo mgmt/install.sh
 ```
 
-Install **holzkube-manager** (`linux_arm64` release, systemd unit, data dir on
-`/mnt/usb`) and open its UI. Create the cluster **homelab** with endpoint
+Install **holzkube-manager** (`linux_arm64` release, systemd unit, data dir under
+`DATA_DIR`) and open its UI. Create the cluster **homelab** with endpoint
 `https://10.20.0.10:6443`.
 
 Add these as stored patches in holzkube (from `talos/patches/`):
@@ -71,10 +72,11 @@ Add these as stored patches in holzkube (from `talos/patches/`):
    `usb` in that patch first (`talosctl get disks --insecure -n 10.20.0.10`).
 5. Bootstrap etcd (holzkube does this for the first control plane, or run
    `talosctl bootstrap -n 10.20.0.10`).
-6. Export credentials on the Zero:
+6. Export credentials on the management node and enable its timers:
    ```sh
    holzkubectl talosconfig homelab | sudo tee /etc/sbc-quartz/talosconfig >/dev/null
-   holzkubectl kubeconfig homelab > ~/.kube/config
+   holzkubectl kubeconfig homelab | sudo tee /etc/sbc-quartz/kubeconfig >/dev/null
+   sudo mgmt/install.sh                       # enables install-image-guard + etcd-snapshot timers
    talosctl --talosconfig /etc/sbc-quartz/talosconfig -n 10.20.0.10 health
    ```
 
@@ -89,14 +91,8 @@ For each board:
    The node appears in holzkube in maintenance mode.
 3. Provision it as **worker**: install disk = the disk you flashed, patches
    `registry-mirror`, `tuppr` (+ `drbd`).
-4. Add it to the guard's inventory on the Zero (`/etc/sbc-quartz/nodes.yaml`, from
-   `zero/nodes.yaml.example`), then install and start the guard once:
-   ```sh
-   sudo install -m 0755 zero/install-image-guard.py /usr/local/bin/
-   sudo install -m 0644 zero/install-image-guard.{service,timer} /etc/systemd/system/
-   sudo systemctl daemon-reload && sudo systemctl enable --now install-image-guard.timer
-   sudo /usr/local/bin/install-image-guard.py
-   ```
+4. Add it to `/etc/sbc-quartz/nodes.yaml` on the management node. The guard timer picks it
+   up within 5 minutes (or run `sudo install-image-guard.py`).
    It changes the node's install image from holzkube's stock installer to
    `ghcr.io/s-collison/talos-installer-<board>:v1.14.5` (no reboot). Check:
    `talosctl -n <ip> get machineconfig -o yaml | grep image:`
@@ -113,8 +109,8 @@ kubectl apply -f talos/tuppr/upgrades.yaml     # TalosUpgrade + KubernetesUpgrad
 
 For each new Talos release:
 
-1. Wait for the **images** workflow (Monday, or run it by hand) to publish
-   `talos-installer-<board>:<new>`.
+1. Nothing to start: **track** sees the release within a day, tags `v<new>` and **images**
+   publishes `talos-installer-<board>:<new>` (watch for a `build-failure` issue instead).
 2. Bump `spec.talos.version` in `talos/tuppr/upgrades.yaml` and apply it. tuppr upgrades one
    node at a time:
    - **Quartz/SOQuartz:** `ghcr.io/s-collison/talos-installer-<board>:<new>`. The overlay
@@ -130,20 +126,7 @@ By hand instead of tuppr:
 
 ## 6. Backups
 
-On the Zero (`/etc/cron.d/etcd-snapshot`), keeping copies off the Pi 5, which holds etcd:
-
-```sh
-0 */6 * * * root talosctl --talosconfig /etc/sbc-quartz/talosconfig -n 10.20.0.10 etcd snapshot /mnt/usb/etcd/etcd-$(date +\%F-\%H).db && ls -1t /mnt/usb/etcd/etcd-*.db | tail -n +29 | xargs -r rm
-```
-
-holzkube can schedule snapshots too. Keep its data dir on `/mnt/usb` as well.
-
-## Optional, later
-
-- **Hantro decode** on SOQuartz: the media images are built by default. Install the node from
-  `talos-v1.14.5-<board>-media.raw.xz`, add the `media` patch, and set `flavor: media` in the
-  guard inventory. Scrypted: `talos/examples/scrypted-media.yaml`.
-- **M.2 storage with LINSTOR:** see [cluster-ops.md](cluster-ops.md#m2-ssd-with-drbd--linstor-piraeus).
-- **PXE:** see [netboot.md](netboot.md). It needs a self-hosted Image Factory before holzkube
-  can provision PXE nodes with the right installer. Groundwork:
-  [provision-and-upgrade.md](provision-and-upgrade.md#later-holzkube-for-everything-self-hosted-image-factory).
+The management node's `etcd-snapshot.timer` saves a snapshot from the Pi 5 every 6 hours
+into `BACKUP_DIR` (`/etc/sbc-quartz/mgmt.env`), keeping 28. Check with
+`systemctl list-timers etcd-snapshot.timer` and `ls $BACKUP_DIR`. Restore:
+`talosctl -n 10.20.0.10 bootstrap --recover-from=<snapshot.db>` on a wiped control plane.
