@@ -104,21 +104,21 @@ jobs:
         if: steps.have.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch ${{ inputs.talos }} https://github.com/siderolabs/talos talos
+          git clone --depth 1 --branch ${{ inputs.talos }} https://github.com/siderolabs/talos _talos
           mkdir -p /tmp/kmods
           crane export --platform linux/arm64 \
             ghcr.io/${{ needs.kernel.outputs.ns }}/kernel:${{ needs.kernel.outputs.kernel_tag }} - \
             | tar x -C /tmp/kmods usr/lib/modules
           moddir="$(ls -d /tmp/kmods/usr/lib/modules/*)"
           python3 hack/media-modules.py "${moddir}" | tee /tmp/media-modules.txt
-          before="$(wc -l < talos/hack/modules-arm64.txt)"
-          cat talos/hack/modules-arm64.txt /tmp/media-modules.txt | sort -u > /tmp/modules-arm64.txt
-          mv /tmp/modules-arm64.txt talos/hack/modules-arm64.txt
-          echo "modules-arm64.txt: ${before} -> $(wc -l < talos/hack/modules-arm64.txt) entries"
-          grep -q 'hantro-vpu.ko$' talos/hack/modules-arm64.txt || { echo "::error::hantro-vpu not in module list"; exit 1; }
+          before="$(wc -l < _talos/hack/modules-arm64.txt)"
+          cat _talos/hack/modules-arm64.txt /tmp/media-modules.txt | sort -u > /tmp/modules-arm64.txt
+          mv /tmp/modules-arm64.txt _talos/hack/modules-arm64.txt
+          echo "modules-arm64.txt: ${before} -> $(wc -l < _talos/hack/modules-arm64.txt) entries"
+          grep -q 'hantro-vpu.ko$' _talos/hack/modules-arm64.txt || { echo "::error::hantro-vpu not in module list"; exit 1; }
       - name: Build installer-base + imager with the media kernel
         if: steps.have.outputs.skip != 'true'
-        working-directory: talos
+        working-directory: _talos
         run: |
           # INSTALLER_ARCH=targetarch: only arm64 install artifacts. The default ("all")
           # also builds amd64 ones from PKG_KERNEL, which we only build for arm64.
