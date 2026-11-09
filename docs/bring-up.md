@@ -16,7 +16,10 @@ Express 7 (gateway, DHCP/DNS) ── PoE switch, VLAN 20 "cluster" 10.20.0.0/24
 
 1. Push the branch, open the PR and merge it:
    `git push -u origin fix/quartz64-arm64-boot && gh pr create --fill --body-file _out/PR_BODY.md`
-2. GitHub → Actions → **images** → *Run workflow* (defaults: latest Talos, stock flavor).
+2. Merging to `main` starts **images** automatically (it also runs on `v*` tags, Mondays, and
+   GitHub → Actions → **images** → *Run workflow*). It builds the **stock** and **media** (Hantro)
+   images for each board. The first media run builds the kernel and takes several hours; stock
+   images don't wait for it.
 3. When it's done, GitHub → Packages: set **sbc-quartz** and every **talos-installer-\*** package
    to **public**. Talos pulls installers without credentials.
 4. Download `talos-v1.14.5-<board>.raw.xz` for each board from the new Release.
@@ -137,8 +140,7 @@ holzkube can schedule snapshots too. Keep its data dir on `/mnt/usb` as well.
 
 ## Optional, later
 
-- **Hantro decode** on SOQuartz: run **images** with flavors `["stock","media"]`. The first
-  run builds the media kernel, which takes hours. Install the node from
+- **Hantro decode** on SOQuartz: the media images are built by default. Install the node from
   `talos-v1.14.5-<board>-media.raw.xz`, add the `media` patch, and set `flavor: media` in the
   guard inventory. Scrypted: `talos/examples/scrypted-media.yaml`.
 - **M.2 storage with LINSTOR:** see [cluster-ops.md](cluster-ops.md#m2-ssd-with-drbd--linstor-piraeus).

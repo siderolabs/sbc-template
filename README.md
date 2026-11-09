@@ -56,10 +56,10 @@ management box (holzkube, registry caches, install-image guard) is in
 
 ## CI releases
 
-`.github/workflows/images.yaml` builds images and upgrade installers for
-quartz64-a, soquartz-blade and soquartz-model-a for the latest Talos release.
-It runs weekly, on `v*` tags, or by hand, and publishes them as a GitHub Release.
-Hardware video limits (no Rockchip MPP on Talos): [docs/hardware-video.md](docs/hardware-video.md). Cluster setup, DRBD/LINSTOR on the M.2 SSD and upgrades are covered in
+`.github/workflows/images.yaml` runs on merges to `main` (image-related files), `v*`
+tags, weekly, or by hand. It builds stock and media (Hantro) images and upgrade
+installers for quartz64-a, soquartz-blade and soquartz-model-a, and publishes them as
+a GitHub Release. Media failures don't block the stock release. Details are in
 [docs/cluster-ops.md](docs/cluster-ops.md).
 
 ## Flash and first boot

@@ -1,13 +1,25 @@
 # Builds the overlay, then Talos SD/eMMC images + upgrade installers for each
-# board. Default flavor: stock. Optional (manual run): "media" flavor (Hantro
-# kernel) and a netboot (PXE/TFTP) tree.
-# and publishes a GitHub Release.
+# board, in two flavors:
+#   stock  - Talos kernel as released (+ official drbd)
+#   media  - same mainline kernel + Hantro/RGA (media-kernel.yaml), drbd rebuilt for it
+# and publishes a GitHub Release. A media failure never blocks the stock images.
 #
-# Triggers: tag v* | weekly (latest Talos, skipped if already released) | manual.
-# Runs on GitHub's arm64 runners (free for public repos; plan minutes for private).
+# Triggers: push to main (image-related paths) | tag v* | weekly | manual.
 name: images
 on:
   push:
+    branches: [main]
+    paths:
+      - Pkgfile
+      - artifacts/**
+      - installers/**
+      - internal/**
+      - profiles/**
+      - kernel/**
+      - hack/build-image.sh
+      - hack/zboot-extract.py
+      - .github/workflows/images.yaml
+      - .github/workflows/media-kernel.yaml
     tags: ["v*"]
   schedule:
     - cron: "17 9 * * 1"   # Mondays 09:17 UTC
@@ -16,11 +28,12 @@ on:
       talos_version:
         description: "Talos version (e.g. v1.14.5). Empty = latest release"
         required: false
-      flavors:
-        description: 'Flavors (JSON list). "media" = Hantro kernel, first build takes hours'
-        default: '["stock"]'
+      media:
+        description: "Also build the media (Hantro) flavor. First run builds the kernel: several hours"
+        type: boolean
+        default: true
       netboot:
-        description: "Also build the PXE/TFTP netboot tree (optional)"
+        description: "Also build the PXE/TFTP netboot tree"
         type: boolean
         default: false
       force:
@@ -39,7 +52,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  BOARDS: '["quartz64-a","soquartz-blade","soquartz-model-a"]'
 
 jobs:
   resolve:
@@ -51,37 +63,55 @@ jobs:
       release_tag: ${{ steps.v.outputs.release_tag }}
       skip: ${{ steps.v.outputs.skip }}
       owner: ${{ steps.v.outputs.owner }}
-      flavors: ${{ steps.v.outputs.flavors }}
       media: ${{ steps.v.outputs.media }}
-      boards: ${{ steps.v.outputs.boards }}
+      netboot: ${{ steps.v.outputs.netboot }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - id: v
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT: ${{ inputs.talos_version }}
           FORCE: ${{ inputs.force }}
-          FLAVORS: ${{ inputs.flavors || '["stock"]' }}
+          MEDIA: ${{ github.event_name == 'workflow_dispatch' && inputs.media || github.event_name != 'workflow_dispatch' }}
+          NETBOOT: ${{ github.event_name == 'workflow_dispatch' && inputs.netboot }}
         run: |
           set -euo pipefail
           talos="${INPUT:-$(gh api repos/siderolabs/talos/releases/latest --jq .tag_name)}"
           # The Talos Makefile pins the pkgs (kernel) build for that release.
           pkgs="$(curl -fsSL "https://raw.githubusercontent.com/siderolabs/talos/${talos}/Makefile" \
                   | sed -nE 's/^PKGS \?= *(.*)$/\1/p' | head -n1)"
-          [ -n "${pkgs}" ] || { echo "could not find PKGS for ${talos}"; exit 1; }
+          [ -n "${pkgs}" ] || { echo "::error::could not find PKGS for ${talos}"; exit 1; }
           src="$(git describe --tag --always --match 'v[0-9]*')"
           skip=false
           if [ "${GITHUB_EVENT_NAME}" = schedule ] || { [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ] && [ "${FORCE}" != true ]; }; then
             gh release view "talos-${talos}-${src}" >/dev/null 2>&1 && skip=true
           fi
-          media=false; echo "${FLAVORS}" | grep -q '"media"' && media=true
           {
             echo "talos=${talos}"; echo "pkgs=${pkgs}"
             echo "overlay_tag=${src}-${talos}"; echo "release_tag=talos-${talos}-${src}"
             echo "skip=${skip}"; echo "owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-            echo "flavors=${FLAVORS}"; echo "media=${media}"; echo "boards=${BOARDS}"
+            echo "media=${MEDIA}"; echo "netboot=${NETBOOT:-false}"
           } | tee -a "$GITHUB_OUTPUT"
+
+  overlay:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: docker/setup-qemu-action@v4      # amd64 half of the overlay (installer binaries only)
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with: { registry: "${{ env.REGISTRY }}", username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - name: Build and push overlay
+        run: |
+          make docker-sbc-quartz \
+            PLATFORM=linux/arm64,linux/amd64 \
+            PKGS="${{ needs.resolve.outputs.pkgs }}" \
+            TARGET_ARGS="--tag=${REGISTRY}/${{ needs.resolve.outputs.owner }}/sbc-quartz:${{ needs.resolve.outputs.overlay_tag }} --push=true"
 
   media-kernel:
     needs: resolve
@@ -92,40 +122,19 @@ jobs:
       pkgs: ${{ needs.resolve.outputs.pkgs }}
     secrets: inherit
 
-  overlay:
-    needs: resolve
-    if: needs.resolve.outputs.skip != 'true'
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: docker/setup-qemu-action@v3      # amd64 half of the overlay (installer binaries only)
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with: { registry: "${{ env.REGISTRY }}", username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-      - name: Build and push overlay
-        run: |
-          make docker-sbc-quartz \
-            PLATFORM=linux/arm64,linux/amd64 \
-            PKGS="${{ needs.resolve.outputs.pkgs }}" \
-            TARGET_ARGS="--tag=${REGISTRY}/${{ needs.resolve.outputs.owner }}/sbc-quartz:${{ needs.resolve.outputs.overlay_tag }} --push=true"
-
-  # Groundwork for a self-hosted Image Factory (artifacts.core.components.overlayManifest):
-  # the official overlay catalog for this Talos version plus our boards, as
-  # ghcr.io/<owner>/overlays:<talos>, with the overlay and catalog signed keylessly.
-  # Never blocks image releases.
+  # Groundwork for a self-hosted Image Factory: official overlay catalog + our
+  # boards as ghcr.io/<owner>/overlays:<talos>, overlay + catalog signed. Never blocks.
   catalog:
     needs: [resolve, overlay]
     runs-on: ubuntu-24.04-arm
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with: { registry: "${{ env.REGISTRY }}", username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-      - uses: sigstore/cosign-installer@v3
-      - uses: imjasonh/setup-crane@v0.4
+      - uses: sigstore/cosign-installer@v4.1.3
+      - uses: imjasonh/setup-crane@v0.7
       - name: Sign overlay, publish catalog
         env:
           OWNER: ${{ needs.resolve.outputs.owner }}
@@ -156,52 +165,85 @@ jobs:
           cosign sign --yes "${REGISTRY}/${OWNER}/overlays@$(crane digest "${REGISTRY}/${OWNER}/overlays:${TALOS}")"
 
   images:
-    needs: [resolve, overlay, media-kernel]
-    # run even when media-kernel was skipped (stock-only builds)
-    if: always() && needs.resolve.outputs.skip != 'true' && needs.overlay.result == 'success' && (needs.media-kernel.result == 'success' || needs.media-kernel.result == 'skipped')
+    name: images (stock)
+    needs: [resolve, overlay]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        flavor: ${{ fromJSON(needs.resolve.outputs.flavors) }}
-        board: ${{ fromJSON(needs.resolve.outputs.boards) }}
+        board: [quartz64-a, soquartz-blade, soquartz-model-a]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with: { registry: "${{ env.REGISTRY }}", username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
       - name: Build, verify, push installer
         env:
           TALOS_VERSION: ${{ needs.resolve.outputs.talos }}
-          FLAVOR: ${{ matrix.flavor }}
+          FLAVOR: stock
+          EXTENSIONS: drbd
           OVERLAY_IMAGE: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/sbc-quartz:${{ needs.resolve.outputs.overlay_tag }}
           INSTALLER_REPO: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/talos-installer
-          OWNER: ${{ needs.resolve.outputs.owner }}
         run: |
-          if [ "${FLAVOR}" = media ]; then
-            export IMAGER_IMAGE=${REGISTRY}/${OWNER}/talos-media/imager:${TALOS_VERSION}
-            export BASE_INSTALLER_IMAGE=${REGISTRY}/${OWNER}/talos-media/installer-base:${TALOS_VERSION}
-            export EXTENSION_IMAGES=${REGISTRY}/${OWNER}/talos-media/drbd:${TALOS_VERSION}
-          else
-            export EXTENSIONS=drbd
-          fi
-          # optional netboot assets, once per flavor (kernel/initramfs are board-independent)
-          if [ "${{ inputs.netboot }}" = true ] && [ "${{ matrix.board }}" = quartz64-a ]; then export NETBOOT=1; fi
+          if [ "${{ needs.resolve.outputs.netboot }}" = true ] && [ "${{ matrix.board }}" = quartz64-a ]; then export NETBOOT=1; fi
           hack/build-image.sh "${{ matrix.board }}"
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4.1.3
       - name: Sign installer (keyless)
         continue-on-error: true
         run: |
-          suffix=""; [ "${{ matrix.flavor }}" = media ] && suffix="-media"
-          ref="${REGISTRY}/${{ needs.resolve.outputs.owner }}/talos-installer-${{ matrix.board }}${suffix}:${{ needs.resolve.outputs.talos }}"
+          ref="${REGISTRY}/${{ needs.resolve.outputs.owner }}/talos-installer-${{ matrix.board }}:${{ needs.resolve.outputs.talos }}"
           digest="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -r .digest)"
           cosign sign --yes "${ref%:*}@${digest}"
       - name: Checksums
         run: cd _out && for f in *.raw.xz *.tar.gz; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done; ls -la
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: image-${{ matrix.flavor }}-${{ matrix.board }}
+          name: image-stock-${{ matrix.board }}
+          path: |
+            _out/*.raw.xz
+            _out/*.tar.gz
+            _out/*.sha256
+          retention-days: 7
+
+  images-media:
+    name: images (media, Hantro)
+    needs: [resolve, overlay, media-kernel]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [quartz64-a, soquartz-blade, soquartz-model-a]
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: docker/login-action@v4
+        with: { registry: "${{ env.REGISTRY }}", username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - name: Build, verify, push installer
+        env:
+          TALOS_VERSION: ${{ needs.resolve.outputs.talos }}
+          FLAVOR: media
+          OVERLAY_IMAGE: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/sbc-quartz:${{ needs.resolve.outputs.overlay_tag }}
+          INSTALLER_REPO: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/talos-installer
+          IMAGER_IMAGE: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/talos-media/imager:${{ needs.resolve.outputs.talos }}
+          BASE_INSTALLER_IMAGE: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/talos-media/installer-base:${{ needs.resolve.outputs.talos }}
+          EXTENSION_IMAGES: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/talos-media/drbd:${{ needs.resolve.outputs.talos }}
+        run: |
+          if [ "${{ needs.resolve.outputs.netboot }}" = true ] && [ "${{ matrix.board }}" = quartz64-a ]; then export NETBOOT=1; fi
+          hack/build-image.sh "${{ matrix.board }}"
+      - uses: sigstore/cosign-installer@v4.1.3
+      - name: Sign installer (keyless)
+        continue-on-error: true
+        run: |
+          ref="${REGISTRY}/${{ needs.resolve.outputs.owner }}/talos-installer-${{ matrix.board }}-media:${{ needs.resolve.outputs.talos }}"
+          digest="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -r .digest)"
+          cosign sign --yes "${ref%:*}@${digest}"
+      - name: Checksums
+        run: cd _out && for f in *.raw.xz *.tar.gz; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done; ls -la
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-media-${{ matrix.board }}
           path: |
             _out/*.raw.xz
             _out/*.tar.gz
@@ -209,29 +251,32 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [resolve, images]
+    needs: [resolve, images, images-media]
+    # stock must succeed; media is included when it built
     if: always() && needs.images.result == 'success'
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: dist, merge-multiple: true }
       - name: Notes
+        env:
+          MEDIA_RESULT: ${{ needs.images-media.result }}
         run: |
           o=${{ needs.resolve.outputs.owner }}; t=${{ needs.resolve.outputs.talos }}
           cat > notes.md <<NOTES
           Talos **${t}** for Pine64 RK3566 boards. Overlay \`${REGISTRY}/${o}/sbc-quartz:${{ needs.resolve.outputs.overlay_tag }}\`,
-          kernel pkgs \`${{ needs.resolve.outputs.pkgs }}\` (media flavor: same + Hantro/RGA, \`${REGISTRY}/${o}/talos-media/*\`).
+          kernel pkgs \`${{ needs.resolve.outputs.pkgs }}\`. Media flavor (Hantro decode): **${MEDIA_RESULT}**.
 
-          | board | stock image | media image (Hantro decode) | upgrade installers |
+          | board | stock image | media image | upgrade installers |
           |---|---|---|---|
           | Quartz64 Model A | \`talos-${t}-quartz64-a.raw.xz\` | \`talos-${t}-quartz64-a-media.raw.xz\` | \`${REGISTRY}/${o}/talos-installer-quartz64-a[-media]:${t}\` |
           | SOQuartz + Blade | \`talos-${t}-soquartz-blade.raw.xz\` | \`talos-${t}-soquartz-blade-media.raw.xz\` | \`${REGISTRY}/${o}/talos-installer-soquartz-blade[-media]:${t}\` |
           | SOQuartz + Model-A | \`talos-${t}-soquartz-model-a.raw.xz\` | \`talos-${t}-soquartz-model-a-media.raw.xz\` | \`${REGISTRY}/${o}/talos-installer-soquartz-model-a[-media]:${t}\` |
 
-          Netboot (U-Boot PXE): \`netboot-${t}-<flavor>.tar.gz\`, unpack into the TFTP root (see docs/netboot.md).
-          Flash: \`xz -dc <image> | sudo dd of=/dev/rdiskN bs=4m\`. Serial: UART2, 1500000 8N1.
+          Flash: \`xz -dc <image> | sudo dd of=/dev/rdiskN bs=4m\`. Serial: UART2, 1500000 8N1. Bring-up: docs/bring-up.md.
           NOTES
-      - uses: softprops/action-gh-release@v2
+          ls -la dist
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve.outputs.release_tag }}
           name: Talos ${{ needs.resolve.outputs.talos }} (${{ needs.resolve.outputs.release_tag }})
