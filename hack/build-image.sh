@@ -153,7 +153,7 @@ rm -rf "${WORK}"
 #   talos/<flavor>/Image               raw arm64 kernel (extracted from EFI zboot) for booti
 #   talos/<flavor>/initramfs-arm64.xz  initramfs incl. extensions
 #   talos/<flavor>/dtb/rockchip/*.dtb  from the overlay
-#   pxelinux.cfg/default               generated from netboot/pxelinux.cfg.default.tmpl
+#   pxelinux.cfg/default               generated from netboot/pxelinux.cfg.default.in
 #   u-boot/<board>/u-boot-rockchip.bin  to prime blank media (not needed by TFTP)
 build_netboot() {
 local board="$1" W="${OUT}/.work-netboot" T="${OUT}/netboot-${FLAVOR}"
@@ -174,7 +174,7 @@ cp -r "${W}/artifacts/arm64/dtb/rockchip" "${T}/talos/${FLAVOR}/dtb/"
 cp -r "${W}/artifacts/arm64/u-boot" "${T}/u-boot"
 local cmdline; cmdline="$(tr -d '\n' < "${cmd}")"
 echo "   cmdline: ${cmdline}"
-sed -e "s#@FLAVOR@#${FLAVOR}#g" -e "s#@CMDLINE@#${cmdline}#" netboot/pxelinux.cfg.default.tmpl > "${T}/pxelinux.cfg/default"
+sed -e "s#@FLAVOR@#${FLAVOR}#g" -e "s#@CMDLINE@#${cmdline}#" netboot/pxelinux.cfg.default.in > "${T}/pxelinux.cfg/default"
 grep -q 'console=ttyS2,1500000n8' "${T}/pxelinux.cfg/default" || { echo "   BAD overlay console arg missing from cmdline" >&2; return 1; }
 tar -C "${T}" -czf "${OUT}/netboot-${TALOS_VERSION}-${FLAVOR}.tar.gz" .
 rm -rf "${W}"

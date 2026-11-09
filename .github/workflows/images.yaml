@@ -187,7 +187,7 @@ jobs:
           INSTALLER_REPO: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/talos-installer
         run: |
           if [ "${{ needs.resolve.outputs.netboot }}" = true ] && [ "${{ matrix.board }}" = quartz64-a ]; then export NETBOOT=1; fi
-          hack/build-image.sh "${{ matrix.board }}"
+          bash hack/build-image.sh "${{ matrix.board }}"
       - uses: sigstore/cosign-installer@v4.1.3
       - name: Sign installer (keyless)
         continue-on-error: true
@@ -231,7 +231,7 @@ jobs:
           EXTENSION_IMAGES: ${{ env.REGISTRY }}/${{ needs.resolve.outputs.owner }}/talos-media/drbd:${{ needs.resolve.outputs.talos }}
         run: |
           if [ "${{ needs.resolve.outputs.netboot }}" = true ] && [ "${{ matrix.board }}" = quartz64-a ]; then export NETBOOT=1; fi
-          hack/build-image.sh "${{ matrix.board }}"
+          bash hack/build-image.sh "${{ matrix.board }}"
       - uses: sigstore/cosign-installer@v4.1.3
       - name: Sign installer (keyless)
         continue-on-error: true

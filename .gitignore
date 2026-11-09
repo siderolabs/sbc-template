@@ -16,3 +16,4 @@ secrets.yaml
 controlplane.yaml
 worker.yaml
 *.talosconfig
+__pycache__/
