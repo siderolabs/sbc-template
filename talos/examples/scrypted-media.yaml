@@ -1,0 +1,28 @@
+# Scrypted on a "media" flavor node (Hantro decode via V4L2 Request).
+# In Scrypted: Settings -> FFmpeg path = /opt/ffmpeg-v4l2request/bin/ffmpeg,
+# decoder args e.g.  -hwaccel v4l2request -hwaccel_output_format drm_prime
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scrypted
+  namespace: home-automation
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: scrypted } }
+  template:
+    metadata: { labels: { app: scrypted } }
+    spec:
+      nodeSelector:
+        quartz64.dev/video-decode: hantro       # set by talos/patches/media.yaml
+      hostNetwork: true                         # HomeKit/mDNS + camera discovery
+      containers:
+        - name: scrypted
+          image: ghcr.io/s-collison/scrypted-rk3566:latest
+          securityContext:
+            privileged: true                    # /dev/video*, /dev/media*, /dev/dri, /dev/dma_heap
+          volumeMounts:
+            - { name: data, mountPath: /server/volume }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: scrypted-data }

@@ -5,3 +5,14 @@
 _out
 go.work.sum
 .DS_Store
+u-boot-*.tar.bz2
+s/
+p/
+/profiles/soquartz-blade.yaml
+
+# generated Talos configs contain cluster secrets — never commit
+talosconfig
+secrets.yaml
+controlplane.yaml
+worker.yaml
+*.talosconfig

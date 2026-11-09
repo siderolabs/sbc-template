@@ -1,25 +1,33 @@
-# syntax = ghcr.io/siderolabs/bldr:v0.3.0
+# syntax = ghcr.io/siderolabs/bldr:v0.6.5
 
 format: v1alpha2
 
 vars:
-  # renovate: datasource=github-tags extractVersion=^lts-v(?<version>.*)$ depName=ARM-software/arm-trusted-firmware
-  arm_trusted_firmware_version: 2.10.4
-  arm_trusted_firmware_sha256: ba215404fe9db26e5f2cef3fdce17b7c8ed344a2a1d592dd01a5f1c5e72cfdbd
-  arm_trusted_firmware_sha512: 0b0e634ba7b1bf3d2a0ef429391f9a6c350abe373b0563e3932f0347246b773238593036674cbb958fffce36c7449f9ebb3ee340650a3184c3e052487fae656b
-
-  arm_trusted_firmware_unstable_commit: fe4df8bdae0a5d1d87c67c24fdd03595cd90dd08
-  arm_trusted_firmware_unstable_sha256: decae910116538333937b698d5f39ef9c77a0e56c4e6bfaed1b8e8801a07fe6a
-  arm_trusted_firmware_unstable_sha512: 49b6bf88810f52febf7ac224ec03b24694e52242ab37c0bb84a2527aa347b9a379131dcce8e157ac73db018a3b9761eed1ad756f34185ae725ac56c1452fd544
+  # Pins track siderolabs/sbc-rockchip (v0.3.0, 2026-11-02), which builds RK3566 boards with them.
+  # renovate: datasource=github-tags depName=ARM-software/arm-trusted-firmware
+  arm_trusted_firmware_version: lts-v2.14.11
+  arm_trusted_firmware_sha256: 9ca8074f6e5b79131acad5a6d82e093850b46ea80025dd81e7b532b8839bc388
+  arm_trusted_firmware_sha512: 0d9853c92e1e895da3f571fecbb91b8ab1194b91bb5fb4bd34de9ef7c32eb0137d4753c888d7e4fadac39da414292ce42ac3be4de32e02400bd5dad5ccaf465c
 
   # renovate: datasource=github-tags extractVersion=^v(?<version>.*)$ depName=u-boot/u-boot
-  uboot_version: 2024.10-rc5
-  uboot_sha256: b5da9c7625b4d73344fef9559207060f02a3d431fb548205d31cf8d46bd51e2c
-  uboot_sha512: bd86b6cc780ac79fef2abca1e6b27a97312105e6a8d809d8a7f93e3665342f90352124786ec075b5a64cf6705a91ae507dff127d2062c64ecdb325e395a7b0d9
+  uboot_version: 2026.10
+  uboot_sha256: f943a88389c8fd70a6b0d061a88267465e143c7ca6ea2b75837ab20f5b60c739
+  uboot_sha512: e38fee5568f14332c37a7ca03d3e69367bcc342ec09421a2b6d971a98d62b7ec522602ecd5df4c9ffb5d900672861259a6c6902294d7fd89f45afc268dc68e10
 
   # renovate: datasource=git-refs versioning=git depName=https://github.com/rockchip-linux/rkbin.git
-  rkbin_ref: a2a0b89b6c8c612dca5ed9ed8a68db8a07f68bc0
-  rkbin_sha256: 9df375316869daadbf874410f4097591c32cc2dca5a30fd328ea7a1cd8f8b6a8
-  rkbin_sha512: 715253b5ef5c7fbcbce8478d4dea5ad3d1b4b738da437b5f0e9b31eed20f9bcb86cab082e4c04c69b42b6ffcc2cbb1a31079b33b968bb76826ff0dd4f83043e1
+  rkbin_ref: 74213af1e952c4683d2e35952507133b61394862
+  rkbin_sha256: b565faeab846950262c07e6debbd6519ea9e7f34943dbb305b9cea6b1026e11a
+  rkbin_sha512: 15245ca51b010edeae933b53a9aa9398552f2bdd65879d2bbbc147417999947e1d71aa29123302c7486976886ebf59867123abdcc2d77be6f566a96c242a5ca2
+
+  # Board table: the ONLY place boards are listed.
+  # One entry per overlay name, format  <overlay-name>:<u-boot defconfig>:<kernel dtb>
+  # Several overlay names may share a defconfig/dtb (e.g. third-party CM4 carriers).
+  # See docs/adding-a-baseboard.md.
+  boards: >-
+    quartz64-a:quartz64-a-rk3566_defconfig:rk3566-quartz64-a.dtb
+    quartz64-b:quartz64-b-rk3566_defconfig:rk3566-quartz64-b.dtb
+    soquartz-blade:soquartz-blade-rk3566_defconfig:rk3566-soquartz-blade.dtb
+    soquartz-model-a:soquartz-model-a-rk3566_defconfig:rk3566-soquartz-model-a.dtb
+    soquartz-cm4:soquartz-cm4-rk3566_defconfig:rk3566-soquartz-cm4.dtb
 labels:
   org.opencontainers.image.source: https://github.com/s-collison/sbc-quartz

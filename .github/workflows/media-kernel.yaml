@@ -1,0 +1,128 @@
+# "media" flavor: Talos with a mainline kernel that has the RK356x V4L2 video
+# blocks enabled (kernel/media.config: Hantro, RGA).
+#
+# Talos boots with module.sig_enforce=1, so the kernel, its modules and every
+# kernel-module extension must be signed with the same key. This workflow
+# builds them together:
+#   1. siderolabs/pkgs @ the Talos release's PKGS commit + kernel/media.config
+#      -> talos-media/kernel, talos-media/drbd-pkg   (one ephemeral signing key)
+#   2. siderolabs/talos @ tag, PKG_KERNEL=<that kernel>
+#      -> talos-media/installer-base, talos-media/imager
+#   3. siderolabs/extensions @ tag, PKGS_PREFIX=talos-media
+#      -> talos-media/drbd (+ alias tag :<talos>)
+# Every image goes to ghcr.io/<owner>/talos-media/*. Each step is skipped if its
+# image already exists.
+name: media-kernel
+on:
+  workflow_call:
+    inputs:
+      talos: { type: string, required: true }   # e.g. v1.14.5
+      pkgs:  { type: string, required: true }   # e.g. v1.14.0-48-gf4bda77 (PKGS from the Talos Makefile)
+  workflow_dispatch:
+    inputs:
+      talos: { description: "Talos version, e.g. v1.14.5", required: true }
+      pkgs:  { description: "PKGS for that release (Talos Makefile), e.g. v1.14.0-48-gf4bda77", required: true }
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    outputs:
+      kernel_tag: ${{ steps.v.outputs.kernel_tag }}
+      ns: ${{ steps.v.outputs.ns }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "ns=${owner}/talos-media" >> "$GITHUB_OUTPUT"
+          echo "kernel_tag=${{ inputs.pkgs }}-media" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - id: have
+        run: |
+          if docker manifest inspect ghcr.io/${{ steps.v.outputs.ns }}/drbd-pkg:${{ steps.v.outputs.kernel_tag }} >/dev/null 2>&1 \
+             && docker manifest inspect ghcr.io/${{ steps.v.outputs.ns }}/kernel:${{ steps.v.outputs.kernel_tag }} >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "kernel already built"
+          fi
+      - name: Checkout siderolabs/pkgs at the release commit
+        if: steps.have.outputs.skip != 'true'
+        run: |
+          sha="${{ inputs.pkgs }}"; sha="${sha##*-g}"
+          git clone --filter=blob:none https://github.com/siderolabs/pkgs pkgs
+          git -C pkgs checkout --detach "${sha}"
+      - name: Apply media config + refresh it
+        if: steps.have.outputs.skip != 'true'
+        working-directory: pkgs
+        run: |
+          set -euo pipefail
+          { echo; echo "# --- sbc-quartz media flavor ---"; cat ../kernel/media.config; } >> kernel/build/config-arm64
+          make local-kernel-build TARGET_ARGS="--build-arg=KERNEL_TARGET=olddefconfig" PLATFORM=linux/arm64 DEST=kernel/build
+          for opt in CONFIG_VIDEO_HANTRO=m CONFIG_VIDEO_HANTRO_ROCKCHIP=y CONFIG_VIDEO_ROCKCHIP_RGA=m; do
+            grep -qx "${opt}" kernel/build/config-arm64 || { echo "::error::${opt} did not survive olddefconfig"; exit 1; }
+          done
+          grep -E 'HANTRO|ROCKCHIP_RGA|ROCKCHIP_VDEC' kernel/build/config-arm64
+      - name: One signing key for kernel + out-of-tree modules
+        if: steps.have.outputs.skip != 'true'
+        working-directory: pkgs/kernel/build/certs
+        run: |
+          openssl req -new -nodes -utf8 -sha512 -days 36500 -batch -x509 -config x509.genkey \
+            -outform PEM -out signing_key.pem -keyout signing_key.pem
+      - name: Build + push kernel and drbd-pkg
+        if: steps.have.outputs.skip != 'true'
+        working-directory: pkgs
+        run: |
+          make kernel drbd-pkg PLATFORM=linux/arm64 PUSH=true \
+            REGISTRY=ghcr.io USERNAME=${{ steps.v.outputs.ns }} TAG=${{ steps.v.outputs.kernel_tag }}
+
+  talos:
+    needs: kernel
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - id: have
+        run: |
+          if docker manifest inspect ghcr.io/${{ needs.kernel.outputs.ns }}/imager:${{ inputs.talos }} >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "imager already built"
+          fi
+      - name: Build installer-base + imager with the media kernel
+        if: steps.have.outputs.skip != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ inputs.talos }} https://github.com/siderolabs/talos talos
+          cd talos
+          make installer-base imager PLATFORM=linux/arm64 PUSH=true \
+            REGISTRY=ghcr.io USERNAME=${{ needs.kernel.outputs.ns }} TAG=${{ inputs.talos }} \
+            PKG_KERNEL=ghcr.io/${{ needs.kernel.outputs.ns }}/kernel:${{ needs.kernel.outputs.kernel_tag }}
+
+  drbd:
+    needs: kernel
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - id: have
+        run: |
+          if docker manifest inspect ghcr.io/${{ needs.kernel.outputs.ns }}/drbd:${{ inputs.talos }} >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "drbd extension already built"
+          fi
+      - name: Build drbd extension against the media kernel
+        if: steps.have.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch ${{ inputs.talos }} https://github.com/siderolabs/extensions extensions
+          cd extensions
+          make drbd PLATFORM=linux/arm64 PUSH=true REGISTRY=ghcr.io USERNAME=${{ needs.kernel.outputs.ns }} \
+            PKGS_PREFIX=ghcr.io/${{ needs.kernel.outputs.ns }} PKGS=${{ needs.kernel.outputs.kernel_tag }}
+          name="$(jq -r '."image.name"' _out/drbd.metadata.json | cut -d, -f1)"
+          echo "built ${name}"
+          docker buildx imagetools create -t ghcr.io/${{ needs.kernel.outputs.ns }}/drbd:${{ inputs.talos }} "${name}"

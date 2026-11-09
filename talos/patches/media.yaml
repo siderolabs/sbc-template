@@ -1,0 +1,8 @@
+# Only for the "media" flavor images/installers (custom kernel with Hantro/RGA).
+machine:
+  kernel:
+    modules:
+      - name: hantro_vpu
+      - name: rockchip_rga
+  nodeLabels:
+    quartz64.dev/video-decode: hantro

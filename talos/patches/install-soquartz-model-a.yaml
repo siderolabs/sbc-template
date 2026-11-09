@@ -1,0 +1,5 @@
+# Per-board installer image (built by .github/workflows/images.yaml).
+# The tag is always the Talos version, so upgrades only change the tag.
+machine:
+  install:
+    image: ghcr.io/s-collison/talos-installer-soquartz-model-a:v1.14.5

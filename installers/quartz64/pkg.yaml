@@ -1,0 +1,39 @@
+name: quartz64-installers
+variant: scratch
+shell: /bin/bash
+dependencies:
+  - stage: base
+steps:
+  - env:
+      GOPATH: /tmp/go
+    network: default
+    cachePaths:
+      - /.cache/go-build
+      - /tmp/go/pkg
+    prepare:
+      - |
+        cd /pkg/src
+        go mod download
+  - env:
+      GOPATH: /tmp/go
+    cachePaths:
+      - /.cache/go-build
+      - /tmp/go/pkg
+    build:
+      - |
+        cd /pkg/src
+        # One installer binary per overlay name (Pkgfile vars.boards); board name
+        # and DTB are baked in at link time.
+        for entry in {{ .boards }}; do
+          IFS=: read -r name defconfig dtb <<< "${entry}"
+          CGO_ENABLED=0 go build \
+            -ldflags "-s -w -X main.board=${name} -X main.dtb=rockchip/${dtb}" \
+            -o ./out/${name} .
+        done
+    install:
+      - |
+        mkdir -p /rootfs/installers/
+        cp /pkg/src/out/* /rootfs/installers/
+finalize:
+  - from: /rootfs
+    to: /rootfs

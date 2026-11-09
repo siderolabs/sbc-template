@@ -1,0 +1,13 @@
+# U-Boot extlinux/pxelinux menu served over TFTP (pxelinux.cfg/default or
+# pxelinux.cfg/01-<mac-with-dashes> for a per-node menu).
+# U-Boot only reaches this when no local disk has a bootable Talos install
+# (boot order: mmc1 mmc0 nvme scsi usb pxe dhcp spi).
+# fdtdir + U-Boot's per-board ${fdtfile} picks the right DTB, so one menu fits all boards.
+default talos
+prompt 0
+timeout 30
+label talos
+  kernel /talos/@FLAVOR@/Image
+  initrd /talos/@FLAVOR@/initramfs-arm64.xz
+  fdtdir /talos/@FLAVOR@/dtb
+  append @CMDLINE@

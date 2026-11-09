@@ -1,0 +1,59 @@
+# U-Boot for the Pine64 RK3566 family. Boards come from Pkgfile vars.boards;
+# each distinct defconfig is built once and installed as
+#   /rootfs/artifacts/arm64/u-boot/<overlay-name>/u-boot-rockchip.bin
+#   /rootfs/artifacts/arm64/u-boot/<overlay-name>/u-boot-rockchip-spi.bin  (boards with SPI flash, e.g. quartz64-a)
+#
+# References: https://u-boot.readthedocs.io/en/latest/board/rockchip/rockchip.html
+name: u-boot-quartz64
+variant: scratch
+shell: /bin/bash
+dependencies:
+  - stage: base
+  # TF-A treats rk3566/rk3568 as a single platform
+  - stage: arm-trusted-firmware-rk3568
+  - stage: rkbin-rk3566
+steps:
+  - sources:
+      - url: https://github.com/u-boot/u-boot/archive/refs/tags/v{{ .uboot_version }}.tar.gz
+        destination: u-boot.tar.gz
+        sha256: "{{ .uboot_sha256 }}"
+        sha512: "{{ .uboot_sha512 }}"
+    env:
+      SOURCE_DATE_EPOCH: {{ .BUILD_ARG_SOURCE_DATE_EPOCH }}
+    prepare:
+      - |
+        tar xf u-boot.tar.gz --strip-components=1
+    build:
+      - |
+        BL31=/libs/arm-trusted-firmware/rk3568/bl31.elf
+        TPL="$(ls /libs/rkbin/rk3566_ddr_1056MHz_v*.bin | sort -V | tail -n1)"
+        test -f "${BL31}" || { echo "missing BL31 ${BL31}"; exit 1; }
+        test -f "${TPL}"  || { echo "missing rk3566 DDR TPL blob"; exit 1; }
+        echo "BL31=${BL31} TPL=${TPL}"
+
+        for entry in {{ .boards }}; do
+          IFS=: read -r name defconfig dtb <<< "${entry}"
+          out=build/${defconfig}
+          if [ ! -s ${out}/u-boot-rockchip.bin ]; then
+            make O=${out} ${defconfig}
+            # Host tools: image signing needs the OpenSSL ENGINE API (gone from the toolchain's
+            # OpenSSL) and mkeficapsule needs gnutls; neither is used for Rockchip boot images.
+            ./scripts/config --file ${out}/.config --disable TOOLS_LIBCRYPTO --disable TOOLS_KWBIMAGE --disable TOOLS_MKEFICAPSULE
+            make O=${out} olddefconfig
+            make O=${out} -j $(nproc) HOSTLDLIBS_mkimage="-lssl -lcrypto" BL31="${BL31}" ROCKCHIP_TPL="${TPL}"
+          fi
+          test -s ${out}/u-boot-rockchip.bin
+        done
+    install:
+      - |
+        for entry in {{ .boards }}; do
+          IFS=: read -r name defconfig dtb <<< "${entry}"
+          mkdir -p /rootfs/artifacts/arm64/u-boot/${name}
+          cp build/${defconfig}/u-boot-rockchip.bin /rootfs/artifacts/arm64/u-boot/${name}/
+          if [ -s build/${defconfig}/u-boot-rockchip-spi.bin ]; then
+            cp build/${defconfig}/u-boot-rockchip-spi.bin /rootfs/artifacts/arm64/u-boot/${name}/
+          fi
+        done
+finalize:
+  - from: /rootfs
+    to: /rootfs

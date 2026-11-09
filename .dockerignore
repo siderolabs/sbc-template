@@ -1,7 +1,12 @@
-# THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
-#
-# Generated on 2024-09-21T16:22:37Z by kres 8be5fa7.
-
+# Build context for bldr: only the package definitions and their sources.
+# (The previous kres-generated file excluded everything except root
+# README.md/pkg.yaml, so artifacts/, installers/ and profiles/ never reached
+# the build.)
 *
+!artifacts
+!installers
+!internal
+!profiles
+!go.work
+!go.work.sum
 !README.md
-!pkg.yaml

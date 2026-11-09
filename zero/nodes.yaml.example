@@ -1,0 +1,9 @@
+# Inventory for install-image-guard: which board installer each node must use.
+# Copy to /etc/sbc-quartz/nodes.yaml on the Zero.
+installerRepo: ghcr.io/s-collison/talos-installer
+nodes:
+  - { ip: 10.20.0.21, board: quartz64-a }
+  - { ip: 10.20.0.22, board: soquartz-blade }
+  - { ip: 10.20.0.23, board: soquartz-model-a, flavor: media }   # optional: media flavor
+# The Pi 5 isn't listed: it uses an Image Factory (rpi5 overlay) installer,
+# which holzkube and tuppr already handle.

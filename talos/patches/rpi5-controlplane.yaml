@@ -1,0 +1,37 @@
+# Raspberry Pi 5 (16 GB): control plane / API server + Plex, ripping, NFS.
+# Boots from microSD. Talos's EPHEMERAL volume (/var: etcd, container images,
+# logs) moves to the SSD, so etcd doesn't write to the SD card. The rest of
+# the SSD becomes a user volume for media/NFS at /var/mnt/media.
+#
+# Apply with the FIRST config (moving EPHEMERAL later wipes it).
+# Check the disk:  talosctl get disks --insecure -n <pi5-ip>
+# Use transport "usb" instead of "nvme" if the SSD is on USB.
+cluster:
+  allowSchedulingOnControlPlanes: true      # single node does API + workloads
+machine:
+  kubelet:
+    extraConfig:
+      # keep headroom for etcd/apiserver when Plex/ripping are busy
+      systemReserved: { cpu: 500m, memory: 1Gi }
+      kubeReserved:   { cpu: 500m, memory: 1Gi }
+---
+apiVersion: v1alpha1
+kind: VolumeConfig
+name: EPHEMERAL
+provisioning:
+  diskSelector:
+    match: disk.transport == "nvme" && !system_disk
+  minSize: 100GiB
+  maxSize: 200GiB
+  grow: false
+---
+apiVersion: v1alpha1
+kind: UserVolumeConfig
+name: media                                  # mounted at /var/mnt/media
+provisioning:
+  diskSelector:
+    match: disk.transport == "nvme" && !system_disk
+  minSize: 1TiB
+  grow: true
+filesystem:
+  type: xfs

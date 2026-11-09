@@ -1,0 +1,8 @@
+[Unit]
+Description=Pin Quartz/SOQuartz nodes to their board installer (sbc-quartz)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/install-image-guard.py

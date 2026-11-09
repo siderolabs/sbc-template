@@ -1,5 +1,5 @@
-go 1.22.6
+go 1.26.5
 
 use (
-    ./installers/soquartz-blade/src
+	./installers/quartz64/src
 )

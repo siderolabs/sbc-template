@@ -1,0 +1,18 @@
+# Declarative upgrades with tuppr (https://github.com/home-operations/tuppr).
+# Bump the versions (by hand or with Renovate) after the images workflow has
+# published installers for that Talos version.
+apiVersion: tuppr.home-operations.com/v1alpha1
+kind: TalosUpgrade
+metadata:
+  name: talos
+spec:
+  talos:
+    version: v1.14.5
+---
+apiVersion: tuppr.home-operations.com/v1alpha1
+kind: KubernetesUpgrade
+metadata:
+  name: kubernetes
+spec:
+  kubernetes:
+    version: v1.37.1

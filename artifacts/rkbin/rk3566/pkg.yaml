@@ -1,6 +1,6 @@
 name: rkbin-rk3566
 variant: scratch
-shell: /toolchain/bin/bash
+shell: /bin/bash
 dependencies:
   - stage: base
 steps:
@@ -14,12 +14,10 @@ steps:
     prepare:
       - |
         tar xf rkbin.tar.gz --strip-components=1
-    build:
     install:
       - |
         mkdir -p /rootfs/rkbin
-
-        cp bin/rk35/rk3566_ddr_1056MHz_v*.bin /rootfs/rkbin/
+        cp bin/rk35/rk3566_ddr_1056MHz_* /rootfs/rkbin/
 finalize:
   - from: /rootfs
     to: /libs

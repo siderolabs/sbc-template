@@ -1,0 +1,9 @@
+# Load DRBD from the drbd system extension (baked into the images) for
+# Piraeus / LINSTOR. usermode_helper must be disabled on Talos.
+machine:
+  kernel:
+    modules:
+      - name: drbd
+        parameters:
+          - usermode_helper=disabled
+      - name: drbd_transport_tcp

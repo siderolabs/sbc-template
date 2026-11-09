@@ -1,0 +1,30 @@
+# Pi Zero 2 W on the install/cluster VLAN: DHCP + TFTP for U-Boot PXE, plus local DNS.
+# Turn OFF the UniFi DHCP server for this VLAN (or use DHCP relay to this box).
+interface=eth0
+bind-interfaces
+
+domain-needed
+bogus-priv
+domain=k8s.lan
+local=/k8s.lan/
+expand-hosts
+
+dhcp-range=10.20.0.100,10.20.0.199,255.255.255.0,12h
+dhcp-option=option:router,10.20.0.1        # gateway for the VLAN (Express 7)
+dhcp-option=option:dns-server,10.20.0.5    # this Pi Zero
+dhcp-authoritative
+
+# Fixed leases: the API leader and workers
+dhcp-host=aa:bb:cc:dd:ee:10,10.20.0.10,rpi5-cp
+dhcp-host=aa:bb:cc:dd:ee:21,10.20.0.21,quartz64a-w1
+dhcp-host=aa:bb:cc:dd:ee:22,10.20.0.22,soquartz-blade-w2
+dhcp-host=aa:bb:cc:dd:ee:23,10.20.0.23,soquartz-modela-w3
+host-record=api.k8s.lan,10.20.0.10
+host-record=holzkube.k8s.lan,10.20.0.5
+
+# TFTP for U-Boot. No dhcp-boot / EFI bootfile on purpose: U-Boot's "pxe"
+# bootdev fetches pxelinux.cfg/* from the DHCP server. Offering an EFI binary
+# would make the "dhcp" bootdev EFI-boot it, and Talos would then install
+# systemd-boot instead of GRUB.
+enable-tftp
+tftp-root=/srv/tftp

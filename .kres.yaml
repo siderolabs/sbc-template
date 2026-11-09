@@ -2,18 +2,26 @@
 kind: pkgfile.Build
 spec:
   targets:
-    - sbc-board
+    - sbc-quartz
   extraBuildArgs:
     - PKGS_PREFIX
     - PKGS
+    - TOOLS_PREFIX
+    - TOOLS
   makefile:
     extraVariables:
       - name: PKGS_PREFIX
         defaultValue: ghcr.io/siderolabs
+      # kernel build the DTBs come from: match the Talos release (see its Makefile PKGS)
       - name: PKGS
-        defaultValue: v1.7.0-alpha.0-33-g3aacf03
+        defaultValue: v1.14.0-48-gf4bda77
+      - name: TOOLS_PREFIX
+        defaultValue: ghcr.io/siderolabs
+      # build toolchain (same pin as siderolabs/sbc-rockchip v0.3.0)
+      - name: TOOLS
+        defaultValue: v1.15.0-alpha.0-16-g54f72f9
 ---
 kind: common.Build
 spec:
-    ignoredPaths:
-      - go.work.sum
+  ignoredPaths:
+    - go.work.sum
